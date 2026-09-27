@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "users": {
+      "description": "Anonymous user accounts with cryptographic identity keys and assigned numbers",
+      "fields": {
+        "username": { "type": "string", "description": "Anonymous username" },
+        "passwordHash": { "type": "string", "description": "PBKDF2 client-side password hash" },
+        "salt": { "type": "string", "description": "128-bit cryptographic salt" },
+        "assignedNumber": { "type": "string", "description": "Allocated private virtual phone number" },
+        "normalizedDigits": { "type": "string", "description": "Stripped digits of assigned number" },
+        "publicKeySpki": { "type": "string", "description": "ECDH P-256 public key" },
+        "keyFingerprint": { "type": "string", "description": "SHA-256 key fingerprint" },
+        "devices": { "type": "array", "description": "Connected device sessions" },
+        "privacySettings": { "type": "map", "description": "User privacy settings" },
+        "createdAt": { "type": "number", "description": "Timestamp created" }
+      }
+    },
+    "usernames": {
+      "description": "Unique username registry preventing duplicate aliases across all users",
+      "fields": {
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "username": { "type": "string", "description": "Claimed lowercase username" },
+        "assignedNumber": { "type": "string", "description": "Allocated virtual number" },
+        "claimedAt": { "type": "number", "description": "Timestamp claimed" }
+      }
+    },
+    "phone_numbers": {
+      "description": "Virtual phone number routing index for instant O(1) number verification and calling",
+      "fields": {
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "username": { "type": "string", "description": "Owner username" },
+        "assignedNumber": { "type": "string", "description": "Formatted virtual phone number" },
+        "digits": { "type": "string", "description": "Normalized phone digits" },
+        "publicKeySpki": { "type": "string", "description": "ECDH P-256 public key" },
+        "keyFingerprint": { "type": "string", "description": "SHA-256 key fingerprint" },
+        "registeredAt": { "type": "number", "description": "Timestamp registered" }
+      }
+    },
+    "call_records": {
+      "description": "Encrypted call history records with zero-knowledge metadata",
+      "fields": {
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "remoteNumber": { "type": "string", "description": "Dialed or caller number" },
+        "remoteAlias": { "type": "string", "description": "Contact or room alias" },
+        "roomNumber": { "type": "string", "description": "Audio room code" },
+        "direction": { "type": "string", "description": "inbound or outbound" },
+        "duration": { "type": "number", "description": "Duration in seconds" },
+        "timestamp": { "type": "number", "description": "Call start timestamp" },
+        "status": { "type": "string", "description": "completed, missed, or rejected" },
+        "deviceOrigin": { "type": "string", "description": "Device name that processed the call" },
+        "encryptionDetails": { "type": "map", "description": "Cipher suite and SAS tokens" }
+      }
+    },
+    "signals": {
+      "description": "Ephemeral call signaling for ringing remote devices worldwide",
+      "fields": {
+        "targetNumber": { "type": "string", "description": "Target assigned virtual phone number" },
+        "callerNumber": { "type": "string", "description": "Caller assigned virtual phone number" },
+        "callerAlias": { "type": "string", "description": "Caller anonymous alias" },
+        "roomNumber": { "type": "string", "description": "E2EE audio room number" },
+        "type": { "type": "string", "description": "call_offer, call_answer, or call_decline" },
+        "timestamp": { "type": "number", "description": "Signal dispatch timestamp" }
+      }
+    },
+    "in_call_messages": {
+      "description": "Zero-trace disappearing messages sent inside audio rooms",
+      "fields": {
+        "roomId": { "type": "string", "description": "Target audio room code" },
+        "senderNumber": { "type": "string", "description": "Sender virtual number" },
+        "text": { "type": "string", "description": "Encrypted message text" },
+        "timestamp": { "type": "number", "description": "Dispatch timestamp" },
+        "expiresAt": { "type": "number", "description": "Expiration burn timestamp" }
+      }
+    }
+  }
+}

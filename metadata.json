@@ -1,0 +1,6 @@
+{
+  "name": "ShadowFrequency",
+  "description": "Zero-knowledge anonymous calling platform with assigned virtual numbers, end-to-end encrypted audio rooms, multi-device sync, and security audit protocols.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

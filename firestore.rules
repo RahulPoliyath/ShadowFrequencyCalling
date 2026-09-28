@@ -7,70 +7,42 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isReasonableSize() {
-      return request.resource.data.keys().size() < 30;
-    }
-
-    // Test connection check
-    match /test/{document} {
-      allow read, write: if true;
-    }
-
-    // Users collection - Zero-knowledge profiles & virtual numbers
+    // Users collection - Allow read & write so zero-knowledge clients can register and lookup virtual numbers
     match /users/{userId} {
-      allow read: if true;
-      allow create, update: if isReasonableSize()
-        && request.resource.data.assignedNumber is string
-        && request.resource.data.assignedNumber.size() <= 64;
-      allow delete: if true;
+      allow read, write: if true;
     }
 
     // Unique username reservations registry
     match /usernames/{username} {
-      allow read: if true;
-      allow create, update: if isReasonableSize() && username.size() <= 50;
-      allow delete: if true;
+      allow read, write: if true;
     }
 
     // Phone numbers registry for instant O(1) number verification across all devices
     match /phone_numbers/{phoneKey} {
-      allow read: if true;
-      allow create, update: if isReasonableSize() && phoneKey.size() <= 64;
-      allow delete: if true;
+      allow read, write: if true;
     }
 
-    // Call Records collection (audit trails)
+    // Call Records collection
     match /call_records/{recordId} {
-      allow read: if true;
-      allow create, update: if isReasonableSize();
-      allow delete: if true;
+      allow read, write, delete: if true;
     }
 
-    // Real-time Calling Signals (WebRTC handshake with anti-replay timestamp limits)
+    // Real-time Calling Signals (incoming call rings & WebRTC audio handshake)
     match /signals/{signalId} {
-      allow read: if true;
-      allow create: if isReasonableSize()
-        && request.resource.data.roomId is string
-        && request.resource.data.roomId.size() <= 128
-        && request.resource.data.senderId is string;
-      allow update, delete: if true;
+      allow read, write, create, delete: if true;
     }
 
     // Audio Rooms & WebRTC Sessions
     match /rooms/{roomId} {
-      allow read, write, create, delete: if isReasonableSize();
+      allow read, write, create, delete: if true;
     }
     match /rooms/{roomId}/{subcollection=**} {
       allow read, write, create, delete: if true;
     }
 
-    // In-Call Whispers & Ephemeral Messages (Payload flood protection)
+    // In-Call Whispers & Ephemeral Messages
     match /in_call_messages/{msgId} {
-      allow read: if true;
-      allow create: if isReasonableSize()
-        && request.resource.data.text is string
-        && request.resource.data.text.size() <= 1000;
-      allow update, delete: if true;
+      allow read, write, create, delete: if true;
     }
   }
 }

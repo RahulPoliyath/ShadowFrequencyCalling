@@ -182,14 +182,12 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
     const newMuted = !call.isMuted;
     webRtcManager.setMicrophoneMuted(newMuted);
     onUpdateCall(prev => ({ ...prev, isMuted: newMuted }));
-    soundEngine.playChime(newMuted ? 'disconnected' : 'connected');
   };
 
   const toggleSpeaker = () => {
     const newSpeaker = !call.isSpeaker;
     webRtcManager.setSpeakerEnabled(newSpeaker);
     onUpdateCall(prev => ({ ...prev, isSpeaker: newSpeaker }));
-    soundEngine.playChime(newSpeaker ? 'connected' : 'disconnected');
   };
 
   const toggleVerified = () => {
@@ -278,32 +276,10 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
                 height={76}
                 className="w-full h-full"
               />
-
-              {call.isMuted && (
-                <div className="absolute inset-0 bg-black/75 backdrop-blur-[2px] flex items-center justify-center space-x-2 text-red-400 font-mono text-[11px] sm:text-xs font-semibold tracking-wider">
-                  <MicOff className="w-4 h-4 text-red-500 animate-pulse" />
-                  <span>MIC MUTED • ZERO PACKETS TRANSMITTING</span>
-                </div>
-              )}
-            </div>
-
-            {/* Voice Isolation & Anti-Echo Status */}
-            <div className="mt-2 flex items-center justify-center space-x-2.5 text-[8px] sm:text-[9px] font-mono text-emerald-400/90">
-              <span className="flex items-center space-x-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span>Noise Gate: ACTIVE</span>
-              </span>
-              <span className="text-neutral-600">•</span>
-              <span className="flex items-center space-x-1 text-cyan-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-                <span>Echo Suppressor: ACTIVE</span>
-              </span>
-              <span className="text-neutral-600 hidden xs:inline">•</span>
-              <span className="text-neutral-500 hidden xs:inline">Opus DTX</span>
             </div>
             
             {/* Real-time Telemetry Metrics */}
-            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 w-full max-w-md mt-2 font-mono text-[9px] sm:text-[10px] text-neutral-400">
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 w-full max-w-md mt-2.5 font-mono text-[9px] sm:text-[10px] text-neutral-400">
               <div className="bg-[#06080d] border border-neutral-800/80 rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center">
                 <span className="text-neutral-500 block uppercase text-[8px] sm:text-[9px]">Bitrate</span>
                 <span className="text-neutral-200 font-semibold">{call.bitrateKbps} kbps</span>

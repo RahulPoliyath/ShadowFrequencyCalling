@@ -56,55 +56,11 @@ export class StorageService {
     }
   }
 
-  static isUsernameTakenLocally(username: string, excludeUserId?: string): boolean {
-    const clean = username.trim().toLowerCase().replace(/^@/, '');
+  static isUsernameTakenLocally(username: string): boolean {
+    const clean = username.trim().toLowerCase();
     if (!clean) return false;
-    // Check system registered users
-    if (SYSTEM_REGISTERED_USERS.some(s => s.username.toLowerCase() === clean && (!excludeUserId || s.id !== excludeUserId))) {
-      return true;
-    }
     const users = this.getUsers();
-    return users.some(u => u.username.trim().toLowerCase() === clean && (!excludeUserId || u.id !== excludeUserId));
-  }
-
-  static isPhoneNumberTakenLocally(phone: string, excludeUserId?: string): boolean {
-    const clean = phone.trim();
-    if (!clean) return false;
-    const digits = clean.replace(/\D/g, '');
-    const digits10 = digits.length === 11 && digits.startsWith('1')
-      ? digits.slice(1)
-      : digits.length >= 10 ? digits.slice(-10) : digits;
-
-    // Check system registered users
-    for (const sys of SYSTEM_REGISTERED_USERS) {
-      if (excludeUserId && sys.id === excludeUserId) continue;
-      if (sys.assignedNumber === clean) return true;
-      const sysDigits = sys.assignedNumber.replace(/\D/g, '');
-      const sysDigits10 = sysDigits.length === 11 && sysDigits.startsWith('1') ? sysDigits.slice(1) : sysDigits;
-      if (
-        (digits.length >= 7 && (sysDigits === digits || sysDigits10 === digits10)) ||
-        (digits10.length === 10 && sysDigits10 === digits10)
-      ) {
-        return true;
-      }
-    }
-
-    // Check local storage users
-    const users = this.getUsers();
-    for (const u of users) {
-      if (excludeUserId && u.id === excludeUserId) continue;
-      if (!u.assignedNumber) continue;
-      if (u.assignedNumber.trim() === clean) return true;
-      const uDigits = u.assignedNumber.replace(/\D/g, '');
-      const uDigits10 = uDigits.length === 11 && uDigits.startsWith('1') ? uDigits.slice(1) : uDigits.slice(-10);
-      if (
-        (digits.length >= 7 && (uDigits === digits || uDigits10 === digits10)) ||
-        (digits10.length === 10 && uDigits10 === digits10)
-      ) {
-        return true;
-      }
-    }
-    return false;
+    return users.some(u => u.username.trim().toLowerCase() === clean);
   }
 
   static saveUser(user: User): void {
@@ -280,17 +236,8 @@ export class StorageService {
   }
 
   static shredAllRecords(): void {
-    const existing = this.getCallRecords();
     localStorage.setItem(STORAGE_KEYS.CALL_RECORDS, JSON.stringify([]));
     this.broadcastSync('ALL_RECORDS_SHREDDED', {});
-
-    // Purge records from cloud Firestore as well
-    const currentUser = this.getCurrentUser();
-    if (currentUser) {
-      FirebaseService.deleteAllCallRecordsFromCloud(currentUser.id).catch(() => {});
-    }
-    existing.forEach(r => FirebaseService.deleteCallRecordFromCloud(r.id).catch(() => {}));
-
     this.logAuditEvent({
       id: 'audit_' + Math.random().toString(36).substring(2, 9),
       timestamp: Date.now(),
@@ -317,12 +264,10 @@ export class StorageService {
     const now = Date.now();
     const records = this.getCallRecords();
     const remaining = records.filter(r => (now - r.timestamp) < maxAge);
-    const expired = records.filter(r => (now - r.timestamp) >= maxAge);
 
-    if (expired.length > 0) {
-      expired.forEach(r => FirebaseService.deleteCallRecordFromCloud(r.id).catch(() => {}));
+    if (remaining.length !== records.length) {
       localStorage.setItem(STORAGE_KEYS.CALL_RECORDS, JSON.stringify(remaining));
-      this.broadcastSync('AUTO_SHRED_COMPLETED', { removedCount: expired.length });
+      this.broadcastSync('AUTO_SHRED_COMPLETED', { removedCount: records.length - remaining.length });
     }
   }
 
@@ -345,11 +290,6 @@ export class StorageService {
       localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(trimmed));
       this.broadcastSync('AUDIT_LOG_ADDED', event);
     } catch {}
-  }
-
-  static clearAuditLogs(): void {
-    localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([]));
-    this.broadcastSync('AUDIT_LOGS_CLEARED', {});
   }
 
   // --- In-Call Encrypted Messages / Whispers ---

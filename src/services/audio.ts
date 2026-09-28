@@ -9,7 +9,6 @@ class SoundEngine {
   private ringOsc2: OscillatorNode | null = null;
   private ringGain: GainNode | null = null;
   private ringInterval: any = null;
-  private isMuted: boolean = false;
 
   // Analyser and microphone stream
   private mediaStream: MediaStream | null = null;
@@ -17,37 +16,6 @@ class SoundEngine {
   private analyserNode: AnalyserNode | null = null;
   private synthInterval: any = null;
   private synthFreqData: Uint8Array = new Uint8Array(32);
-
-  public setMuted(muted: boolean): void {
-    this.isMuted = muted;
-    if (muted) {
-      this.stopRinging();
-    }
-  }
-
-  public getMuted(): boolean {
-    return this.isMuted;
-  }
-
-  public initAutoUnlock(): void {
-    if (typeof window === 'undefined') return;
-    const unlock = () => {
-      try {
-        const ctx = this.getContext();
-        if (ctx && ctx.state === 'suspended') {
-          ctx.resume().catch(() => {});
-        }
-      } catch {}
-      window.removeEventListener('touchstart', unlock);
-      window.removeEventListener('touchend', unlock);
-      window.removeEventListener('click', unlock);
-      window.removeEventListener('keydown', unlock);
-    };
-    window.addEventListener('touchstart', unlock, { passive: true, capture: true });
-    window.addEventListener('touchend', unlock, { passive: true, capture: true });
-    window.addEventListener('click', unlock, { passive: true, capture: true });
-    window.addEventListener('keydown', unlock, { passive: true, capture: true });
-  }
 
   private getContext(): AudioContext {
     if (!this.ctx) {
@@ -64,7 +32,6 @@ class SoundEngine {
    * Plays standard Dual-Tone Multi-Frequency (DTMF) telecom frequencies.
    */
   playDtmf(digit: string, duration = 0.15): void {
-    if (this.isMuted) return;
     try {
       const ctx = this.getContext();
       const dtmfFrequencies: Record<string, [number, number]> = {
@@ -114,7 +81,6 @@ class SoundEngine {
    * Plays ringtone for incoming or outgoing calls.
    */
   startRinging(isIncoming = false): void {
-    if (this.isMuted) return;
     this.stopRinging();
     try {
       const ctx = this.getContext();
@@ -167,10 +133,9 @@ class SoundEngine {
   }
 
   /**
-   * Plays a connected, ended, verified, alert, or secure chime.
+   * Plays a connected or ended chime.
    */
-  playChime(type: 'connected' | 'disconnected' | 'verified' | 'alert' | 'secure'): void {
-    if (this.isMuted) return;
+  playChime(type: 'connected' | 'disconnected' | 'verified'): void {
     try {
       const ctx = this.getContext();
       const now = ctx.currentTime;
@@ -182,19 +147,12 @@ class SoundEngine {
         osc.frequency.exponentialRampToValueAtTime(880, now + 0.25);
         gain.gain.setValueAtTime(0.1, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
-      } else if (type === 'verified' || type === 'secure') {
+      } else if (type === 'verified') {
         osc.frequency.setValueAtTime(523.25, now);
         osc.frequency.setValueAtTime(659.25, now + 0.1);
         osc.frequency.setValueAtTime(783.99, now + 0.2);
         gain.gain.setValueAtTime(0.12, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
-      } else if (type === 'alert') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(880, now);
-        osc.frequency.setValueAtTime(440, now + 0.08);
-        osc.frequency.setValueAtTime(880, now + 0.16);
-        gain.gain.setValueAtTime(0.08, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
       } else {
         osc.frequency.setValueAtTime(440, now);
         osc.frequency.exponentialRampToValueAtTime(220, now + 0.3);
@@ -293,4 +251,3 @@ class SoundEngine {
 }
 
 export const soundEngine = new SoundEngine();
-soundEngine.initAutoUnlock();

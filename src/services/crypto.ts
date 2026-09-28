@@ -9,45 +9,20 @@ const EMOJI_SECURITY_SET = [
 ];
 
 /**
- * Generates a pool of 5 unique, fresh anonymous virtual numbers that do not match existing users.
+ * Generates a pool of 5 unique, plausible anonymous virtual numbers.
  */
-export function generatePhoneNumberPool(excludedNumbers: string[] = []): string[] {
+export function generatePhoneNumberPool(): string[] {
   const areaCodes = ['800', '888', '877', '866', '855', '844', '833'];
-  const pool: string[] = [];
-  const excludedDigits = new Set(excludedNumbers.map(n => n.replace(/\D/g, '')));
+  const pool: Set<string> = new Set();
 
-  // Read local storage to avoid duplicates
-  if (typeof window !== 'undefined' && window.localStorage) {
-    try {
-      const raw = localStorage.getItem('ciphercall_users_v1');
-      if (raw) {
-        const users = JSON.parse(raw);
-        for (const u of users) {
-          if (u.assignedNumber) {
-            excludedDigits.add(u.assignedNumber.replace(/\D/g, ''));
-          }
-        }
-      }
-    } catch {}
-  }
-
-  let attempts = 0;
-  while (pool.length < 5 && attempts < 200) {
-    attempts++;
+  while (pool.size < 5) {
     const area = areaCodes[Math.floor(Math.random() * areaCodes.length)];
     const middle = Math.floor(100 + Math.random() * 900);
     const last = Math.floor(1000 + Math.random() * 9000);
-    const candidate = `+1 (${area}) ${middle}-${last}`;
-    const digits = candidate.replace(/\D/g, '');
-
-    if (pool.includes(candidate) || excludedDigits.has(digits)) {
-      continue;
-    }
-
-    pool.push(candidate);
+    pool.add(`+1 (${area}) ${middle}-${last}`);
   }
 
-  return pool;
+  return Array.from(pool);
 }
 
 /**
@@ -201,37 +176,3 @@ export async function generateSessionAesKey(): Promise<CryptoKey> {
     ['encrypt', 'decrypt']
   );
 }
-
-/**
- * Strips private RFC1918 LAN addresses and internal host topologies from WebRTC
- * ICE candidates to prevent peer reconnaissance and private network mapping.
- */
-export function sanitizeIceCandidate(candidateStr: string): string | null {
-  if (!candidateStr) return null;
-  // Check for private subnet patterns or local mDNS identifiers
-  const isPrivate = /(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.0\.0\.1|\.local|fe80:)/i.test(candidateStr);
-  if (/typ host/i.test(candidateStr) && isPrivate) {
-    return null; // Block internal LAN IP leakage
-  }
-  return candidateStr;
-}
-
-/**
- * Securely overwrites a memory buffer with zeroes to prevent memory-dump forensic scraping.
- */
-export function secureScrubMemory(buffer: Uint8Array): void {
-  for (let i = 0; i < buffer.length; i++) {
-    buffer[i] = (Math.random() * 256) | 0;
-  }
-  buffer.fill(0);
-}
-
-/**
- * Computes a SHA-256 integrity digest for payload authentication.
- */
-export async function hashPayloadSha256(data: string): Promise<string> {
-  const enc = new TextEncoder();
-  const digest = await crypto.subtle.digest('SHA-256', enc.encode(data));
-  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
-}
-

@@ -24,6 +24,8 @@ export interface PrivacySettings {
   antiMetadata: boolean;
   quickLockPinEnabled: boolean;
   quickLockPin: string;
+  soundEffectsEnabled?: boolean;
+  opusDtxEnabled?: boolean;
 }
 
 export interface User {
@@ -38,6 +40,8 @@ export interface User {
   keyFingerprint: string;
   devices: DeviceSession[];
   privacySettings: PrivacySettings;
+  termsAccepted?: boolean;
+  termsAcceptedAt?: number;
 }
 
 export interface CallRecord {
@@ -94,4 +98,40 @@ export interface SecurityAuditEvent {
   type: 'AUTH' | 'KEY_ROTATION' | 'E2EE_HANDSHAKE' | 'SHRED' | 'DEVICE_SYNC' | 'SECURITY_ALERT';
   message: string;
   severity: 'info' | 'warning' | 'success';
+}
+
+export type BotPatrolStatus = 'patrolling' | 'scanning' | 'alert' | 'mitigating' | 'hardened';
+
+export interface BotDiagnosticCheck {
+  id: string;
+  name: string;
+  category: 'Network' | 'Keystore' | 'Storage' | 'DOM/XSS' | 'Memory' | 'Protocol';
+  status: 'passed' | 'warning' | 'fixed' | 'running';
+  lastRun: number;
+  details: string;
+  recommendation?: string;
+}
+
+export interface SecurityBotIncident {
+  id: string;
+  timestamp: number;
+  type: 'DOM_XSS_ATTEMPT' | 'STORAGE_TAMPER' | 'KEY_CORRUPTION' | 'BURST_SIGNAL_FLOOD' | 'INSECURE_SOCKET' | 'MEMORY_HEAP_LEAK' | 'INTEGRITY_CHECK';
+  severity: 'low' | 'medium' | 'high' | 'mitigated';
+  title: string;
+  description: string;
+  autoRemediated: boolean;
+  remediationAction?: string;
+}
+
+export interface SecurityBotState {
+  isActive: boolean;
+  isPatrolling: boolean;
+  autoMitigate: boolean;
+  patrolIntervalSeconds: number;
+  threatsNeutralizedCount: number;
+  lastPatrolTimestamp: number;
+  overallHealthScore: number;
+  status: BotPatrolStatus;
+  checks: BotDiagnosticCheck[];
+  incidents: SecurityBotIncident[];
 }

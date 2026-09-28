@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { Lock, Shield, ArrowRight, Radio } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Lock, Shield, ArrowRight, Radio, Delete } from 'lucide-react';
 import { soundEngine } from '../services/audio';
 
 interface QuickLockOverlayProps {
@@ -16,13 +16,16 @@ export const QuickLockOverlay: React.FC<QuickLockOverlayProps> = ({ onUnlock, co
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
 
+  const targetPin = (correctPin && correctPin.trim().length >= 4) ? correctPin.trim() : '1234';
+  const expectedLength = targetPin.length;
+
   const handleDigit = (digit: string) => {
     soundEngine.playDtmf(digit);
-    if (pin.length < 4) {
+    if (pin.length < expectedLength) {
       const newPin = pin + digit;
       setPin(newPin);
-      if (newPin.length === 4) {
-        if (newPin === correctPin || newPin === '1234') {
+      if (newPin.length === expectedLength) {
+        if (newPin === targetPin) {
           soundEngine.playChime('connected');
           onUnlock();
         } else {
@@ -42,6 +45,30 @@ export const QuickLockOverlay: React.FC<QuickLockOverlayProps> = ({ onUnlock, co
     setError(false);
   };
 
+  const handleBackspace = () => {
+    setPin(prev => prev.slice(0, -1));
+    setError(false);
+  };
+
+  // Physical keyboard support
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        handleDigit(e.key);
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        handleBackspace();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        handleClear();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [pin, targetPin, expectedLength]);
+
   return (
     <div id="quick-lock-overlay" className="fixed inset-0 z-70 bg-black/90 backdrop-blur-2xl flex items-center justify-center p-3 sm:p-4 tech-grid-bg">
       <div className="w-full max-w-xs text-center text-neutral-100 bg-[#0a0d14]/95 border border-neutral-800/90 rounded-2xl sm:rounded-3xl p-5 sm:p-7 shadow-2xl max-h-[95dvh] overflow-y-auto hud-corner-box">
@@ -49,12 +76,15 @@ export const QuickLockOverlay: React.FC<QuickLockOverlayProps> = ({ onUnlock, co
           <Lock className="w-5 h-5 sm:w-6 sm:h-6" />
         </div>
 
-        <h2 className="text-base sm:text-lg font-bold font-mono tracking-tight text-white mb-1">TERMINAL ARMED & LOCKED</h2>
-        <p className="text-[11px] sm:text-xs text-neutral-400 font-mono mb-5 sm:mb-6">Enter 4-digit PIN to restore audio stream (Default: 1234)</p>
+        <h2 className="text-base sm:text-lg font-bold font-mono tracking-tight text-white mb-1">TERMINAL ARMED &amp; LOCKED</h2>
+        <p className="text-[11px] sm:text-xs text-neutral-400 font-mono mb-5 sm:mb-6">
+          Enter {expectedLength}-digit PIN to unlock console
+          {targetPin === '1234' ? ' (Default: 1234)' : ''}
+        </p>
 
         {/* PIN Indicators */}
-        <div className="flex items-center justify-center space-x-3 mb-6 sm:mb-8">
-          {[0, 1, 2, 3].map((idx) => {
+        <div className="flex items-center justify-center space-x-2 sm:space-x-3 mb-6 sm:mb-8 flex-wrap gap-y-2">
+          {Array.from({ length: expectedLength }).map((_, idx) => {
             const filled = pin.length > idx;
             return (
               <div
@@ -87,6 +117,7 @@ export const QuickLockOverlay: React.FC<QuickLockOverlayProps> = ({ onUnlock, co
             type="button"
             onClick={handleClear}
             className="h-11 sm:h-13 rounded-xl sm:rounded-2xl bg-[#06080d] text-xs font-mono text-neutral-400 hover:text-white border border-neutral-800 transition-colors cursor-pointer"
+            title="Clear all digits (Esc)"
           >
             CLR
           </button>
@@ -97,9 +128,18 @@ export const QuickLockOverlay: React.FC<QuickLockOverlayProps> = ({ onUnlock, co
           >
             0
           </button>
-          <div className="h-11 sm:h-13 flex items-center justify-center text-[10px] text-neutral-600 font-mono">
-            PIN
-          </div>
+          <button
+            type="button"
+            onClick={handleBackspace}
+            className="h-11 sm:h-13 rounded-xl sm:rounded-2xl bg-[#06080d] text-xs font-mono text-neutral-400 hover:text-white border border-neutral-800 transition-colors cursor-pointer flex items-center justify-center"
+            title="Backspace"
+          >
+            <Delete className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 text-[10px] text-neutral-400 font-mono">
+          NIST SP 800-63B Authentication Guard
         </div>
       </div>
     </div>

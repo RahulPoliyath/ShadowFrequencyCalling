@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Phone, History, Shield, ShieldCheck, Lock, LogOut, Copy, 
-  Check, Smartphone, Laptop, Sparkles, Bell, Wifi, Radio, User as UserIcon
+  Check, Smartphone, Laptop, Sparkles, Bell, Wifi, Radio, User as UserIcon, Bot, Sliders
 } from 'lucide-react';
 import { 
   User, CallRecord, ActiveCallState, DeviceSession, PrivacySettings 
@@ -25,14 +25,19 @@ import { ActiveCallModal } from './components/ActiveCallModal';
 import { IncomingCallBanner } from './components/IncomingCallBanner';
 import { CallHistoryView } from './components/CallHistoryView';
 import { PrivacySettingsView } from './components/PrivacySettingsView';
+import { SettingsView } from './components/SettingsView';
 import { SecurityAuditModal } from './components/SecurityAuditModal';
+import { SecurityBotWidget } from './components/SecurityBotWidget';
 import { QuickLockOverlay } from './components/QuickLockOverlay';
+import { SplashScreen } from './components/SplashScreen';
+import { LogoutSplashScreen } from './components/LogoutSplashScreen';
+import { TermsAndConditionsModal } from './components/TermsAndConditionsModal';
 import { FirebaseService } from './services/firebase';
 import { webRtcManager } from './services/webrtc';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<'dialer' | 'history' | 'privacy'>('dialer');
+  const [activeTab, setActiveTab] = useState<'dialer' | 'history' | 'privacy' | 'settings'>('dialer');
   const [callRecords, setCallRecords] = useState<CallRecord[]>([]);
   const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
   const [incomingCall, setIncomingCall] = useState<{
@@ -44,9 +49,19 @@ export default function App() {
   } | null>(null);
 
   const [showSecurityAudit, setShowSecurityAudit] = useState(false);
+  const [showSecurityBot, setShowSecurityBot] = useState(false);
   const [isQuickLocked, setIsQuickLocked] = useState(false);
   const [copiedNumber, setCopiedNumber] = useState(false);
   const [notificationPrompt, setNotificationPrompt] = useState<string | null>(null);
+  const [showSplash, setShowSplash] = useState(true);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // Auto-dismiss splash screen if an incoming call arrives
+  useEffect(() => {
+    if (incomingCall && showSplash) {
+      setShowSplash(false);
+    }
+  }, [incomingCall, showSplash]);
 
   // Initialize and load user data
   useEffect(() => {
@@ -383,8 +398,20 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    if (activeCall) {
+      webRtcManager.cleanup();
+      soundEngine.cleanupCallAudio();
+      setActiveCall(null);
+    }
+    soundEngine.stopRinging();
+    setIncomingCall(null);
+    setIsLoggingOut(true);
+  };
+
+  const handleCompleteLogout = () => {
     StorageService.setCurrentUser(null);
     setCurrentUser(null);
+    setIsLoggingOut(false);
   };
 
   const handleDeleteRecord = (id: string) => {
@@ -397,9 +424,41 @@ export default function App() {
     setCallRecords([]);
   };
 
+  // Show 8-second cryptographic boot splash screen on launch
+  if (showSplash) {
+    return <SplashScreen onComplete={() => setShowSplash(false)} />;
+  }
+
+  // Show 8-second amnesic logout splash screen on session termination
+  if (isLoggingOut) {
+    return <LogoutSplashScreen onComplete={handleCompleteLogout} />;
+  }
+
   // If not logged in, show AuthModal
   if (!currentUser) {
     return <AuthModal onSuccess={(u) => setCurrentUser(u)} />;
+  }
+
+  // If user has not accepted terms, show mandatory unskippable Terms modal
+  if (!currentUser.termsAccepted) {
+    return (
+      <TermsAndConditionsModal
+        isStandalone={true}
+        onAccept={() => {
+          const updated: User = {
+            ...currentUser,
+            termsAccepted: true,
+            termsAcceptedAt: Date.now(),
+          };
+          StorageService.saveUser(updated);
+          FirebaseService.syncUserToCloud(updated).catch(() => {});
+          setCurrentUser(updated);
+        }}
+        onDecline={() => {
+          handleLogout();
+        }}
+      />
+    );
   }
 
   return (
@@ -522,19 +581,59 @@ export default function App() {
               <Shield className="w-3.5 h-3.5 text-emerald-400" />
               <span>Defense</span>
             </button>
+
+            <button
+              id="nav-settings-btn"
+              type="button"
+              onClick={() => setActiveTab('settings')}
+              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
+                activeTab === 'settings'
+                  ? 'bg-neutral-800 text-white shadow-sm border border-neutral-700'
+                  : 'text-neutral-400 hover:text-neutral-200'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Settings</span>
+            </button>
           </nav>
 
           {/* Quick Header Actions */}
           <div className="flex items-center space-x-1.5 sm:space-x-2">
+            {/* Real-Time XrAnonymous Security Bot */}
+            <button
+              id="open-security-bot-btn"
+              type="button"
+              onClick={() => setShowSecurityBot(true)}
+              className="p-1.5 sm:px-2.5 sm:py-1.5 bg-[#0c1017] hover:bg-neutral-800 border border-cyan-500/30 hover:border-cyan-500/70 text-cyan-300 hover:text-white text-xs font-mono rounded-xl transition-colors flex items-center space-x-1.5 cursor-pointer min-h-[36px] min-w-[36px] sm:min-w-0 justify-center group"
+              title="XrAnonymous Real-Time Inbuilt Security Bot"
+            >
+              <Bot className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
+              <span className="hidden lg:inline">XrAnonymous Bot</span>
+            </button>
+
             <button
               id="open-security-audit-btn"
               type="button"
               onClick={() => setShowSecurityAudit(true)}
-              className="p-1.5 sm:px-2.5 sm:py-1.5 bg-[#0c1017] hover:bg-neutral-800 border border-neutral-800 text-neutral-300 text-xs font-mono rounded-xl transition-colors flex items-center space-x-1.5 cursor-pointer min-h-[36px] min-w-[36px] sm:min-w-0 justify-center"
-              title="Security Audit Inspector"
+              className="p-1.5 sm:px-2.5 sm:py-1.5 bg-[#0c1017] hover:bg-neutral-800 border border-neutral-800 hover:border-emerald-500/50 text-neutral-300 hover:text-white text-xs font-mono rounded-xl transition-colors flex items-center space-x-1.5 cursor-pointer min-h-[36px] min-w-[36px] sm:min-w-0 justify-center"
+              title="Penetration Testing & Security Audit"
             >
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span className="hidden md:inline">Audit NIST</span>
+              <span className="hidden md:inline">Pen Test &amp; Audit</span>
+            </button>
+
+            <button
+              id="header-settings-btn"
+              type="button"
+              onClick={() => setActiveTab('settings')}
+              className={`p-2 rounded-xl transition-colors cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center ${
+                activeTab === 'settings'
+                  ? 'bg-neutral-800 text-white border border-cyan-500/40'
+                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800/80'
+              }`}
+              title="Terminal Customisation Settings"
+            >
+              <Sliders className="w-4 h-4 text-cyan-400" />
             </button>
 
             <button
@@ -542,7 +641,7 @@ export default function App() {
               type="button"
               onClick={() => setIsQuickLocked(true)}
               className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/80 rounded-xl transition-colors cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center"
-              title="Lock Console (PIN: 1234)"
+              title="Lock Console (PIN Protected)"
             >
               <Lock className="w-4 h-4" />
             </button>
@@ -590,6 +689,21 @@ export default function App() {
               user={currentUser}
               onUpdateUser={setCurrentUser}
               onTriggerTestCall={handleTriggerSimulatedInboundCall}
+              onOpenSecurityAudit={() => setShowSecurityAudit(true)}
+              onOpenSecurityBot={() => setShowSecurityBot(true)}
+              onOpenSettings={() => setActiveTab('settings')}
+            />
+          </div>
+        )}
+
+        {activeTab === 'settings' && (
+          <div className="w-full flex-1">
+            <SettingsView
+              user={currentUser}
+              onUpdateUser={setCurrentUser}
+              onLockTerminal={() => setIsQuickLocked(true)}
+              onShredAllRecords={handleShredAll}
+              callRecordsCount={callRecords.length}
             />
           </div>
         )}
@@ -604,7 +718,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('dialer')}
-          className={`flex flex-col items-center justify-center min-w-[64px] min-h-[44px] transition-all cursor-pointer ${
+          className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] transition-all cursor-pointer ${
             activeTab === 'dialer' ? 'text-emerald-400 scale-105' : 'text-neutral-500 hover:text-neutral-300'
           }`}
         >
@@ -615,7 +729,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('history')}
-          className={`flex flex-col items-center justify-center min-w-[64px] min-h-[44px] relative transition-all cursor-pointer ${
+          className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] relative transition-all cursor-pointer ${
             activeTab === 'history' ? 'text-cyan-400 scale-105' : 'text-neutral-500 hover:text-neutral-300'
           }`}
         >
@@ -633,12 +747,23 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('privacy')}
-          className={`flex flex-col items-center justify-center min-w-[64px] min-h-[44px] transition-all cursor-pointer ${
+          className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] transition-all cursor-pointer ${
             activeTab === 'privacy' ? 'text-emerald-400 scale-105' : 'text-neutral-500 hover:text-neutral-300'
           }`}
         >
           <Shield className="w-5 h-5 mb-0.5" />
           <span className="text-[10px] font-mono tracking-tight font-medium">Defense</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('settings')}
+          className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] transition-all cursor-pointer ${
+            activeTab === 'settings' ? 'text-cyan-400 scale-105' : 'text-neutral-500 hover:text-neutral-300'
+          }`}
+        >
+          <Sliders className="w-5 h-5 mb-0.5" />
+          <span className="text-[10px] font-mono tracking-tight font-medium">Settings</span>
         </button>
       </nav>
 
@@ -656,6 +781,13 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Aegis Inbuilt Real-Time Security Bot Widget & Floating Capsule */}
+      <SecurityBotWidget
+        isOpen={showSecurityBot}
+        onOpen={() => setShowSecurityBot(true)}
+        onClose={() => setShowSecurityBot(false)}
+      />
 
     </div>
   );

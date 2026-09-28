@@ -7,6 +7,8 @@ import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, Auth } from 'firebase/auth';
 import { 
   getFirestore, 
+  initializeFirestore,
+  getDocFromServer,
   collection, 
   doc, 
   setDoc, 
@@ -20,31 +22,115 @@ import {
   Firestore,
   Unsubscribe
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
 import { User, CallRecord, EncryptedMessage } from '../types';
 
+// Dynamically resolve local config without breaking when firebase-applet-config.json is gitignored
+const localConfigs = import.meta.glob<Record<string, string>>([
+  '/firebase-applet-config.json', 
+  '../../firebase-applet-config.json',
+  '../firebase-applet-config.json'
+], { 
+  eager: true, 
+  import: 'default' 
+});
+
+const fileConfig = (
+  localConfigs['/firebase-applet-config.json'] || 
+  localConfigs['../../firebase-applet-config.json'] || 
+  localConfigs['../firebase-applet-config.json'] || 
+  {}
+) as Record<string, string>;
+
+const activeConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || fileConfig.apiKey || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || fileConfig.authDomain || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || fileConfig.projectId || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || fileConfig.storageBucket || '',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || fileConfig.messagingSenderId || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || fileConfig.appId || '',
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || fileConfig.firestoreDatabaseId || '',
+};
+
+const hasValidApiKey = !!(
+  activeConfig.apiKey && 
+  activeConfig.apiKey.startsWith('AIzaSy') && 
+  !activeConfig.apiKey.includes('YOUR_') &&
+  !activeConfig.apiKey.includes('Mock')
+);
+
 let app: FirebaseApp;
-if (!getApps().length) {
-  app = initializeApp({
-    apiKey: firebaseConfig.apiKey,
-    authDomain: firebaseConfig.authDomain,
-    projectId: firebaseConfig.projectId,
-    storageBucket: firebaseConfig.storageBucket,
-    messagingSenderId: firebaseConfig.messagingSenderId,
-    appId: firebaseConfig.appId,
-  });
-} else {
-  app = getApp();
+try {
+  if (!getApps().length) {
+    app = initializeApp({
+      apiKey: hasValidApiKey ? activeConfig.apiKey : 'AIzaSy_MockSafeFallbackApiKeyForOfflineMode_99',
+      authDomain: activeConfig.authDomain || 'localhost',
+      projectId: activeConfig.projectId || 'shadowfrequency-offline',
+      storageBucket: activeConfig.storageBucket,
+      messagingSenderId: activeConfig.messagingSenderId,
+      appId: activeConfig.appId,
+    });
+  } else {
+    app = getApp();
+  }
+} catch {
+  app = getApps()[0] || ({} as FirebaseApp);
 }
 
-export const auth: Auth = getAuth(app);
-export const db: Firestore = firebaseConfig.firestoreDatabaseId
-  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-  : getFirestore(app);
+// Safely initialize Auth with graceful fallback to prevent unhandled auth/invalid-api-key crashes
+export const auth: Auth = (() => {
+  try {
+    if (hasValidApiKey) {
+      return getAuth(app);
+    }
+  } catch (err) {
+    console.warn('Firebase Auth fallback enabled:', err);
+  }
+  
+  // Safe mock auth structure to avoid crashing the whole SPA
+  return {
+    currentUser: null,
+    onAuthStateChanged: (_auth: any, callback: (u: any) => void) => {
+      callback(null);
+      return () => {};
+    },
+  } as unknown as Auth;
+})();
+
+// Initialize Firestore with auto-detect long-polling to prevent [code=unavailable] in preview iframes
+export const db: Firestore = (() => {
+  try {
+    return initializeFirestore(app, {
+      experimentalAutoDetectLongPolling: true,
+    }, activeConfig.firestoreDatabaseId || '(default)');
+  } catch {
+    try {
+      return activeConfig.firestoreDatabaseId
+        ? getFirestore(app, activeConfig.firestoreDatabaseId)
+        : getFirestore(app);
+    } catch {
+      return {} as Firestore;
+    }
+  }
+})();
+
+// Skill mandated validation: test connection on startup
+async function testConnection() {
+  if (!hasValidApiKey) return;
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firestore operating in offline resilience mode.');
+    }
+  }
+}
+testConnection();
 
 // Ensure background auth is initialized gracefully without blocking or hanging Firestore calls
 let authReadyPromise: Promise<void> | null = null;
 export async function ensureAuthReady(): Promise<void> {
+  if (!hasValidApiKey) return;
+  if (!auth || typeof auth.onAuthStateChanged !== 'function') return;
   if (auth.currentUser) return;
   if (!authReadyPromise) {
     authReadyPromise = new Promise((resolve) => {
@@ -217,20 +303,51 @@ export class FirebaseService {
   }
 
   /**
-   * Checks whether a username is already taken by any user across Cloud Firestore.
+   * Updates user credentials, handling username change by freeing the old username index.
    */
-  static async isUsernameTaken(username: string): Promise<boolean> {
+  static async updateUserCredentials(user: User, oldUsername?: string): Promise<void> {
     try {
       await ensureAuthReady();
-      const clean = username.trim().toLowerCase();
+      const oldClean = oldUsername ? oldUsername.trim().toLowerCase() : '';
+      const newClean = user.username.trim().toLowerCase();
+
+      if (oldClean && oldClean !== newClean) {
+        try {
+          await deleteDoc(doc(db, 'usernames', oldClean));
+        } catch (err) {
+          console.warn('Could not remove old username doc:', err);
+        }
+      }
+
+      await this.syncUserToCloud(user);
+    } catch (e) {
+      console.warn('Update user credentials error:', e);
+    }
+  }
+
+  /**
+   * Checks whether a username is already taken by any user across Cloud Firestore or System nodes.
+   */
+  static async isUsernameTaken(username: string, excludeUserId?: string): Promise<boolean> {
+    try {
+      await ensureAuthReady();
+      const clean = username.trim().toLowerCase().replace(/^@/, '');
       if (!clean) return false;
+
+      // 0. Check pre-registered system nodes
+      if (SYSTEM_REGISTERED_USERS.some(s => s.username.toLowerCase() === clean && (!excludeUserId || s.id !== excludeUserId))) {
+        return true;
+      }
 
       // 1. Direct document lookup in unique usernames registry
       try {
         const usernameRef = doc(db, 'usernames', clean);
         const usernameSnap = await getDoc(usernameRef);
         if (usernameSnap.exists()) {
-          return true;
+          const data = usernameSnap.data();
+          if (!excludeUserId || data.userId !== excludeUserId) {
+            return true;
+          }
         }
       } catch {}
 
@@ -239,14 +356,18 @@ export class FirebaseService {
         const q = query(collection(db, 'users'), where('username', '==', clean));
         const snapshot = await getDocs(q);
         if (!snapshot.empty) {
-          const existingData = snapshot.docs[0].data() as User;
-          setDoc(doc(db, 'usernames', clean), {
-            userId: existingData.id,
-            username: clean,
-            assignedNumber: existingData.assignedNumber || '',
-            claimedAt: Date.now()
-          }).catch(() => {});
-          return true;
+          for (const docSnap of snapshot.docs) {
+            const existingData = docSnap.data() as User;
+            if (!excludeUserId || existingData.id !== excludeUserId) {
+              setDoc(doc(db, 'usernames', clean), {
+                userId: existingData.id,
+                username: clean,
+                assignedNumber: existingData.assignedNumber || '',
+                claimedAt: Date.now()
+              }).catch(() => {});
+              return true;
+            }
+          }
         }
       } catch {}
 
@@ -255,6 +376,210 @@ export class FirebaseService {
       console.warn('isUsernameTaken check error:', e);
       return false;
     }
+  }
+
+  /**
+   * Checks whether a virtual phone number is already taken/assigned across Cloud Firestore or System nodes.
+   */
+  static async isPhoneNumberTaken(phone: string, excludeUserId?: string): Promise<boolean> {
+    try {
+      await ensureAuthReady();
+      const clean = phone.trim();
+      if (!clean) return false;
+
+      const digits = clean.replace(/\D/g, '');
+      const digits10 = digits.length === 11 && digits.startsWith('1')
+        ? digits.slice(1)
+        : digits.length >= 10 ? digits.slice(-10) : digits;
+
+      // 0. Check pre-registered system nodes
+      for (const sys of SYSTEM_REGISTERED_USERS) {
+        if (excludeUserId && sys.id === excludeUserId) continue;
+        if (sys.assignedNumber === clean) return true;
+        const sysDigits = sys.assignedNumber.replace(/\D/g, '');
+        const sysDigits10 = sysDigits.length === 11 && sysDigits.startsWith('1') ? sysDigits.slice(1) : sysDigits;
+        if (
+          (digits.length >= 7 && (sysDigits === digits || sysDigits10 === digits10)) ||
+          (digits10.length === 10 && sysDigits10 === digits10)
+        ) {
+          return true;
+        }
+      }
+
+      // 1. Direct O(1) query in phone_numbers index collection
+      const keysToCheck = [
+        digits,
+        digits10,
+        digits10.length === 10 ? `1${digits10}` : ''
+      ].filter((k): k is string => Boolean(k && k.length >= 7));
+
+      for (const key of keysToCheck) {
+        try {
+          const phoneRef = doc(db, 'phone_numbers', key);
+          const phoneSnap = await getDoc(phoneRef);
+          if (phoneSnap.exists()) {
+            const pData = phoneSnap.data();
+            if (!excludeUserId || pData.userId !== excludeUserId) {
+              return true;
+            }
+          }
+        } catch {}
+      }
+
+      // 2. Query 'users' collection by assignedNumber
+      try {
+        const q1 = query(collection(db, 'users'), where('assignedNumber', '==', clean));
+        const snap1 = await getDocs(q1);
+        if (!snap1.empty) {
+          for (const docSnap of snap1.docs) {
+            const u = docSnap.data() as User;
+            if (!excludeUserId || u.id !== excludeUserId) {
+              return true;
+            }
+          }
+        }
+      } catch {}
+
+      // 3. Query 'users' collection by digits10
+      if (digits10 && digits10.length === 10) {
+        try {
+          const q2 = query(collection(db, 'users'), where('digits10', '==', digits10));
+          const snap2 = await getDocs(q2);
+          if (!snap2.empty) {
+            for (const docSnap of snap2.docs) {
+              const u = docSnap.data() as User;
+              if (!excludeUserId || u.id !== excludeUserId) {
+                return true;
+              }
+            }
+          }
+        } catch {}
+      }
+
+      return false;
+    } catch (e) {
+      console.warn('isPhoneNumberTaken check error:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Retrieves the comprehensive set of all assigned / claimed virtual numbers across:
+   * 1. Built-in system node profiles
+   * 2. Local device storage database
+   * 3. Cloud Firestore phone_numbers collection and users collection
+   */
+  static async getAllUsedNumbersSet(excludeUserId?: string): Promise<Set<string>> {
+    const used = new Set<string>();
+
+    const recordNumber = (rawNumber?: string) => {
+      if (!rawNumber) return;
+      const clean = rawNumber.trim();
+      if (!clean) return;
+      used.add(clean);
+      const digits = clean.replace(/\D/g, '');
+      if (digits) {
+        used.add(digits);
+        if (digits.length === 11 && digits.startsWith('1')) {
+          used.add(digits.slice(1));
+        } else if (digits.length === 10) {
+          used.add(`1${digits}`);
+        }
+      }
+    };
+
+    // 1. Built-in system registered users
+    for (const sys of SYSTEM_REGISTERED_USERS) {
+      if (excludeUserId && sys.id === excludeUserId) continue;
+      recordNumber(sys.assignedNumber);
+    }
+
+    // 2. Local storage users
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const raw = localStorage.getItem('ciphercall_users_v1');
+        if (raw) {
+          const localUsers: User[] = JSON.parse(raw);
+          for (const u of localUsers) {
+            if (excludeUserId && u.id === excludeUserId) continue;
+            recordNumber(u.assignedNumber);
+            if (Array.isArray(u.availableNumbersPool)) {
+              u.availableNumbersPool.forEach(p => recordNumber(p));
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 3. Cloud Firestore: phone_numbers collection and users collection
+    try {
+      await ensureAuthReady();
+      // 3a. Phone numbers collection
+      const phoneSnaps = await getDocs(collection(db, 'phone_numbers'));
+      phoneSnaps.forEach(docSnap => {
+        const data = docSnap.data();
+        if (!excludeUserId || data.userId !== excludeUserId) {
+          used.add(docSnap.id);
+          recordNumber(data.assignedNumber);
+          recordNumber(data.normalizedDigits);
+          recordNumber(data.digits10);
+        }
+      });
+
+      // 3b. Users collection
+      const userSnaps = await getDocs(collection(db, 'users'));
+      userSnaps.forEach(docSnap => {
+        const data = docSnap.data() as User;
+        if (!excludeUserId || data.id !== excludeUserId) {
+          recordNumber(data.assignedNumber);
+          if (Array.isArray(data.availableNumbersPool)) {
+            data.availableNumbersPool.forEach(p => recordNumber(p));
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('getAllUsedNumbersSet Firestore sync fallback:', err);
+    }
+
+    return used;
+  }
+
+  /**
+   * Generates a pool of completely unique, 100% fresh virtual numbers that are NOT assigned to any user
+   * across local storage, pre-registered system nodes, or Cloud Firestore.
+   */
+  static async generateUniqueNumberPool(count: number = 5, excludeUserId?: string): Promise<string[]> {
+    const areaCodes = ['800', '888', '877', '866', '855', '844', '833'];
+    const usedNumbers = await this.getAllUsedNumbersSet(excludeUserId);
+    const uniquePool: string[] = [];
+    let attempts = 0;
+
+    while (uniquePool.length < count && attempts < 300) {
+      attempts++;
+      const area = areaCodes[Math.floor(Math.random() * areaCodes.length)];
+      const middle = Math.floor(100 + Math.random() * 900);
+      const last = Math.floor(1000 + Math.random() * 9000);
+      const candidate = `+1 (${area}) ${middle}-${last}`;
+
+      if (uniquePool.includes(candidate)) continue;
+
+      const digits = candidate.replace(/\D/g, '');
+      const digits10 = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+
+      // Filter against all known used numbers
+      if (
+        usedNumbers.has(candidate) ||
+        usedNumbers.has(digits) ||
+        usedNumbers.has(digits10) ||
+        usedNumbers.has(`1${digits10}`)
+      ) {
+        continue;
+      }
+
+      uniquePool.push(candidate);
+    }
+
+    return uniquePool;
   }
 
   /**
@@ -622,6 +947,21 @@ export class FirebaseService {
       await ensureAuthReady();
       await deleteDoc(doc(db, 'call_records', recordId));
     } catch {}
+  }
+
+  /**
+   * Deletes all call records for a user from Firestore.
+   */
+  static async deleteAllCallRecordsFromCloud(userId: string): Promise<void> {
+    try {
+      await ensureAuthReady();
+      const q = query(collection(db, 'call_records'), where('userId', '==', userId));
+      const snapshot = await getDocs(q);
+      const deletePromises = snapshot.docs.map(docSnap => deleteDoc(docSnap.ref));
+      await Promise.all(deletePromises);
+    } catch (e) {
+      console.warn('Delete all cloud call records error:', e);
+    }
   }
 
   /**

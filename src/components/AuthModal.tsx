@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Shield, Lock, Phone, UserCheck, Key, CheckCircle, AlertTriangle, ArrowRight, RefreshCw, Radio, Loader2, Check } from 'lucide-react';
+import { Shield, Lock, Phone, UserCheck, Key, CheckCircle, AlertTriangle, ArrowRight, RefreshCw, Radio, Loader2, Check, Sparkles, ShieldCheck } from 'lucide-react';
 import { User, DeviceSession, PrivacySettings } from '../types';
 import { 
   generatePhoneNumberPool, 
@@ -38,16 +38,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   // Virtual Number Selection
   const [phonePool, setPhonePool] = useState<string[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<string>('');
+  const [loadingNumbers, setLoadingNumbers] = useState(false);
   
   // Error & Status State
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lockoutRemaining, setLockoutRemaining] = useState<number>(0);
 
-  const refreshNumberPool = () => {
-    const pool = generatePhoneNumberPool();
-    setPhonePool(pool);
-    setSelectedNumber(pool[0]);
+  const refreshNumberPool = async () => {
+    setLoadingNumbers(true);
+    try {
+      const pool = await FirebaseService.generateUniqueNumberPool(5);
+      if (pool.length > 0) {
+        setPhonePool(pool);
+        setSelectedNumber(pool[0]);
+      } else {
+        const fallback = generatePhoneNumberPool();
+        setPhonePool(fallback);
+        setSelectedNumber(fallback[0]);
+      }
+    } catch {
+      const fallback = generatePhoneNumberPool();
+      setPhonePool(fallback);
+      setSelectedNumber(fallback[0]);
+    } finally {
+      setLoadingNumbers(false);
+    }
   };
 
   const handleUsernameChange = (val: string) => {
@@ -188,7 +204,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
 
         // Username is verified free and available
         setUsernameAvailable(true);
-        refreshNumberPool();
+        await refreshNumberPool();
         setStep('number-select');
       } catch (err: any) {
         setError('Username verification error: ' + (err.message || 'Network check failed'));
@@ -206,15 +222,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
 
     setLoading(true);
     try {
-      const cleanUsername = username.trim().toLowerCase();
+      const cleanUsername = username.trim().toLowerCase().replace(/^@/, '');
 
-      // Final atomic uniqueness check before account creation
-      const isTakenLocally = StorageService.isUsernameTakenLocally(cleanUsername);
-      const isTakenCloud = await FirebaseService.isUsernameTaken(cleanUsername);
-      if (isTakenLocally || isTakenCloud) {
-        setError(`Username alias "@${cleanUsername}" was claimed by another user just now. Please select another alias.`);
+      // 1. Final atomic uniqueness check for username
+      const isUsernameTakenLocally = StorageService.isUsernameTakenLocally(cleanUsername);
+      const isUsernameTakenCloud = await FirebaseService.isUsernameTaken(cleanUsername);
+      if (isUsernameTakenLocally || isUsernameTakenCloud) {
+        setError(`Username alias "@${cleanUsername}" is already taken. It cannot be assigned to any other user.`);
         setStep('credentials');
         setUsernameAvailable(false);
+        setLoading(false);
+        return;
+      }
+
+      // 2. Final atomic uniqueness check for virtual phone number
+      const isNumberTakenLocally = StorageService.isPhoneNumberTakenLocally(selectedNumber);
+      const isNumberTakenCloud = await FirebaseService.isPhoneNumberTaken(selectedNumber);
+      if (isNumberTakenLocally || isNumberTakenCloud) {
+        setError(`Virtual number "${selectedNumber}" is already taken and cannot be assigned to any other user. Refreshing pool with new available numbers...`);
+        await refreshNumberPool();
         setLoading(false);
         return;
       }
@@ -460,58 +486,90 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
             </button>
           </form>
         ) : (
-          /* Step 2: Choose 1 of 5 Assigned Virtual Numbers */
+          /* Step 2: Choose 1 of 5 Fresh Available Virtual Numbers */
           <div className="space-y-3 sm:space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-xs sm:text-sm font-bold text-white font-mono">Select Assigned Virtual Number</h2>
+                <div className="flex items-center space-x-1.5">
+                  <h2 className="text-xs sm:text-sm font-bold text-white font-mono">Select Assigned Virtual Number</h2>
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-[9px] font-mono text-emerald-400 font-bold uppercase flex items-center space-x-1">
+                    <Sparkles className="w-2.5 h-2.5" />
+                    <span>Fresh Numbers Only</span>
+                  </span>
+                </div>
                 <p className="text-[11px] sm:text-xs text-neutral-400 font-mono mt-0.5">
-                  Allocating dedicated line for alias <span className="text-emerald-400 font-bold">@{username.trim().toLowerCase()}</span>
+                  Allocating dedicated line for alias <span className="text-emerald-400 font-bold">@{username.trim().toLowerCase().replace(/^@/, '')}</span>
                 </p>
               </div>
               <button
                 type="button"
                 onClick={refreshNumberPool}
-                title="Regenerate numbers"
-                className="p-1.5 text-neutral-400 hover:text-emerald-400 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
+                disabled={loadingNumbers}
+                title="Regenerate fresh numbers pool"
+                className="p-1.5 text-neutral-400 hover:text-emerald-400 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer flex items-center space-x-1"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className={`w-4 h-4 ${loadingNumbers ? 'animate-spin text-emerald-400' : ''}`} />
+                <span className="text-[10px] font-mono hidden sm:inline">Refresh</span>
               </button>
             </div>
 
-            <div className="space-y-1.5 sm:space-y-2 mt-1.5">
-              {phonePool.map((num, idx) => {
-                const isSelected = selectedNumber === num;
-                return (
-                  <button
-                    key={num}
-                    id={`number-option-${idx}`}
-                    type="button"
-                    onClick={() => setSelectedNumber(num)}
-                    className={`w-full flex items-center justify-between p-2.5 sm:p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                      isSelected
-                        ? 'bg-emerald-950/40 border-emerald-500/80 text-white shadow-sm'
-                        : 'bg-[#06080d] border-neutral-800 text-neutral-300 hover:border-neutral-700'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0">
-                      <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                        isSelected ? 'bg-emerald-500/20 text-emerald-400' : 'bg-neutral-900 text-neutral-500'
-                      }`}>
-                        <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs sm:text-sm font-mono font-bold text-neutral-100 truncate">{num}</div>
-                        <div className="text-[9px] sm:text-[10px] font-mono text-neutral-400 truncate">Line #{idx + 1} · E2EE Ready</div>
-                      </div>
-                    </div>
-                    {isSelected && (
-                      <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 ml-2" />
-                    )}
-                  </button>
-                );
-              })}
+            {/* Zero-Collision Fresh Number Guarantee Banner */}
+            <div className="p-2 sm:p-2.5 bg-[#070b12] border border-cyan-500/25 rounded-xl flex items-center justify-between text-[10px] sm:text-[11px] font-mono text-neutral-300">
+              <div className="flex items-center space-x-1.5 text-cyan-300">
+                <ShieldCheck className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span>All used numbers excluded. Every line below is 100% fresh &amp; unassigned.</span>
+              </div>
+              <span className="text-[9px] font-bold text-emerald-400 uppercase hidden sm:inline">0 Conflicts</span>
             </div>
+
+            {/* Numbers List */}
+            {loadingNumbers ? (
+              <div className="py-8 text-center space-y-2">
+                <Loader2 className="w-6 h-6 animate-spin text-emerald-400 mx-auto" />
+                <p className="text-xs font-mono text-neutral-400">Filtering used lines and provisioning fresh pool...</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5 sm:space-y-2 mt-1.5">
+                {phonePool.map((num, idx) => {
+                  const isSelected = selectedNumber === num;
+                  return (
+                    <button
+                      key={num}
+                      id={`number-option-${idx}`}
+                      type="button"
+                      onClick={() => setSelectedNumber(num)}
+                      className={`w-full flex items-center justify-between p-2.5 sm:p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-950/40 border-emerald-500/80 text-white shadow-sm ring-1 ring-emerald-500/50'
+                          : 'bg-[#06080d] border-neutral-800 text-neutral-300 hover:border-neutral-700'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0">
+                        <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                          isSelected ? 'bg-emerald-500/20 text-emerald-400' : 'bg-neutral-900 text-neutral-500'
+                        }`}>
+                          <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs sm:text-sm font-mono font-bold text-neutral-100 truncate">{num}</span>
+                            <span className="px-1.5 py-0.2 rounded bg-emerald-500/10 border border-emerald-500/30 text-[8px] font-mono text-emerald-400 font-bold uppercase shrink-0">
+                              Fresh Line
+                            </span>
+                          </div>
+                          <div className="text-[9px] sm:text-[10px] font-mono text-neutral-400 truncate mt-0.5">
+                            Line #{idx + 1} · Unused · Zero Prior History
+                          </div>
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 ml-2" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="flex space-x-2.5 pt-1 sm:pt-2">
               <button

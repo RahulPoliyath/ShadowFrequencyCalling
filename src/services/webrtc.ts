@@ -136,6 +136,7 @@ export class WebRtcManager {
       audio.id = 'webrtc-remote-audio';
       audio.autoplay = true;
       audio.setAttribute('playsinline', 'true');
+      audio.setAttribute('webkit-playsinline', 'true');
       audio.style.display = 'none';
       document.body.appendChild(audio);
     }
@@ -311,8 +312,10 @@ export class WebRtcManager {
               const unlock = () => {
                 this.remoteAudioElement?.play().catch(() => {});
                 document.removeEventListener('click', unlock);
+                document.removeEventListener('touchend', unlock);
               };
               document.addEventListener('click', unlock, { once: true });
+              document.addEventListener('touchend', unlock, { once: true });
             });
           }
 

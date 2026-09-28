@@ -9,20 +9,45 @@ const EMOJI_SECURITY_SET = [
 ];
 
 /**
- * Generates a pool of 5 unique, plausible anonymous virtual numbers.
+ * Generates a pool of 5 unique, fresh anonymous virtual numbers that do not match existing users.
  */
-export function generatePhoneNumberPool(): string[] {
+export function generatePhoneNumberPool(excludedNumbers: string[] = []): string[] {
   const areaCodes = ['800', '888', '877', '866', '855', '844', '833'];
-  const pool: Set<string> = new Set();
+  const pool: string[] = [];
+  const excludedDigits = new Set(excludedNumbers.map(n => n.replace(/\D/g, '')));
 
-  while (pool.size < 5) {
+  // Read local storage to avoid duplicates
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = localStorage.getItem('ciphercall_users_v1');
+      if (raw) {
+        const users = JSON.parse(raw);
+        for (const u of users) {
+          if (u.assignedNumber) {
+            excludedDigits.add(u.assignedNumber.replace(/\D/g, ''));
+          }
+        }
+      }
+    } catch {}
+  }
+
+  let attempts = 0;
+  while (pool.length < 5 && attempts < 200) {
+    attempts++;
     const area = areaCodes[Math.floor(Math.random() * areaCodes.length)];
     const middle = Math.floor(100 + Math.random() * 900);
     const last = Math.floor(1000 + Math.random() * 9000);
-    pool.add(`+1 (${area}) ${middle}-${last}`);
+    const candidate = `+1 (${area}) ${middle}-${last}`;
+    const digits = candidate.replace(/\D/g, '');
+
+    if (pool.includes(candidate) || excludedDigits.has(digits)) {
+      continue;
+    }
+
+    pool.push(candidate);
   }
 
-  return Array.from(pool);
+  return pool;
 }
 
 /**

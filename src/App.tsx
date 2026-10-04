@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Phone, History, Shield, ShieldCheck, Lock, LogOut, Copy, 
-  Check, Smartphone, Laptop, Sparkles, Bell, Wifi, Radio, User as UserIcon, Bot, Sliders
+  Check, Smartphone, Laptop, Sparkles, Bell, Wifi, Radio, User as UserIcon, Bot, Sliders, Crown
 } from 'lucide-react';
 import { 
   User, CallRecord, ActiveCallState, DeviceSession, PrivacySettings 
@@ -518,8 +518,17 @@ export default function App() {
 
             {/* Assigned virtual number badge */}
             <div className="flex items-center space-x-1.5 bg-[#0c1017] border border-neutral-800/90 rounded-lg sm:rounded-xl px-2 sm:px-3 py-0.5 sm:py-1 text-xs">
-              <span className="text-[9px] sm:text-[10px] text-neutral-400 font-mono hidden md:inline">LINE:</span>
-              <span className="font-mono font-bold text-emerald-400 text-[11px] sm:text-xs truncate max-w-[130px] sm:max-w-none">
+              {currentUser.customNumberSubscription?.active ? (
+                <span className="px-1 py-0.2 rounded bg-amber-500/20 border border-amber-500/40 text-[8px] font-mono text-amber-300 font-bold flex items-center space-x-0.5 shrink-0" title={`VIP Custom Number (${currentUser.customNumberSubscription.planName})`}>
+                  <Crown className="w-2.5 h-2.5" />
+                  <span>VIP</span>
+                </span>
+              ) : (
+                <span className="text-[9px] sm:text-[10px] text-neutral-400 font-mono hidden md:inline">LINE:</span>
+              )}
+              <span className={`font-mono font-bold text-[11px] sm:text-xs truncate max-w-[130px] sm:max-w-none ${
+                currentUser.customNumberSubscription?.active ? 'text-amber-300' : 'text-emerald-400'
+              }`}>
                 {currentUser.assignedNumber}
               </span>
               <button

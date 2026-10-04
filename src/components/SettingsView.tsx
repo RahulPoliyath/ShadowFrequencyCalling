@@ -9,9 +9,10 @@ import {
   Smartphone, Laptop, Eye, EyeOff, Radio, CheckCircle, AlertTriangle, 
   ShieldCheck, Cpu, Zap, Server, Volume2, VolumeX, Check, Copy, 
   Sparkles, Bot, PhoneCall, Clock, Hash, AlertCircle, ArrowRight,
-  ShieldAlert, Activity, Terminal
+  ShieldAlert, Activity, Terminal, Crown, CreditCard, Calendar,
+  X, CheckSquare
 } from 'lucide-react';
-import { User, PrivacySettings, DeviceSession } from '../types';
+import { User, PrivacySettings, DeviceSession, CustomNumberPlan, CustomNumberPlanId, CustomNumberSubscription } from '../types';
 import { 
   generateEcdhKeyPair, 
   exportPublicKey, 
@@ -23,6 +24,56 @@ import {
 import { StorageService } from '../services/storage';
 import { FirebaseService } from '../services/firebase';
 import { soundEngine } from '../services/audio';
+
+function formatCustomPhoneNumber(areaCode: string, digitsRaw: string): string {
+  const digits = digitsRaw.replace(/\D/g, '');
+  if (digits.length === 7) {
+    return `+1 (${areaCode}) ${digits.slice(0, 3)}-${digits.slice(3)}`;
+  } else if (digits.length === 10) {
+    return `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  } else if (digits.length === 11 && digits.startsWith('1')) {
+    return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  return digitsRaw;
+}
+
+export const CUSTOM_NUMBER_PLANS: CustomNumberPlan[] = [
+  {
+    id: '7days',
+    name: '7-Day Pass',
+    durationLabel: '7 Days',
+    durationDays: 7,
+    priceRs: 25,
+    badge: 'Micro Pass'
+  },
+  {
+    id: '1month',
+    name: '1-Month VIP',
+    durationLabel: '1 Month',
+    durationDays: 30,
+    priceRs: 100,
+    perMonthLabel: '₹100/mo'
+  },
+  {
+    id: '6months',
+    name: '6-Month Elite',
+    durationLabel: '6 Months',
+    durationDays: 180,
+    priceRs: 500,
+    perMonthLabel: '₹83/mo',
+    badge: 'Save ₹100'
+  },
+  {
+    id: '1year',
+    name: '1-Year Ultimate',
+    durationLabel: '1 Year',
+    durationDays: 365,
+    priceRs: 800,
+    perMonthLabel: '₹66/mo',
+    badge: 'Best Value · Save ₹400',
+    popular: true
+  }
+];
 
 interface SettingsViewProps {
   user: User;
@@ -250,7 +301,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const takenLocally = StorageService.isUsernameTakenLocally(clean, user.id);
       const takenCloud = await FirebaseService.isUsernameTaken(clean, user.id);
       if (takenLocally || takenCloud) {
-        setUsernameMessage({ text: `Callsign "@${clean}" is already taken and cannot be assigned to another user.`, type: 'error' });
+        setUsernameMessage({ 
+          text: `Callsign "@${clean}" is already taken (case-insensitive). Uppercase or lowercase variations cannot be assigned to another user.`, 
+          type: 'error' 
+        });
         setSavingUsername(false);
         return;
       }
@@ -413,6 +467,200 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } finally {
       setGeneratingPool(false);
     }
+  };
+
+  // --- 5B. Custom VIP Number Subscription State ---
+  const [customNumberToggle, setCustomNumberToggle] = useState<boolean>(
+    Boolean(user.customNumberSubscription?.active)
+  );
+  const [customAreaCode, setCustomAreaCode] = useState<string>('800');
+  const [customDigits, setCustomDigits] = useState<string>('777-7777');
+  const [selectedPlanId, setSelectedPlanId] = useState<CustomNumberPlanId>('1year');
+  const [checkingCustomNumber, setCheckingCustomNumber] = useState<boolean>(false);
+  const [customNumberStatus, setCustomNumberStatus] = useState<'idle' | 'available' | 'taken' | 'invalid'>('idle');
+  const [customNumberError, setCustomNumberError] = useState<string | null>(null);
+  const [showCheckoutModal, setShowCheckoutModal] = useState<boolean>(false);
+  const [isChangingNumber, setIsChangingNumber] = useState<boolean>(false);
+  const [paymentMethod, setPaymentMethod] = useState<'upi' | 'card' | 'netbanking'>('upi');
+  const [upiIdInput, setUpiIdInput] = useState<string>('operator@okhdfcbank');
+  const [cardNumberInput, setCardNumberInput] = useState<string>('4532 •••• •••• 8821');
+  const [cardExpiryInput, setCardExpiryInput] = useState<string>('08/29');
+  const [cardCvvInput, setCardCvvInput] = useState<string>('773');
+  const [processingPayment, setProcessingPayment] = useState<boolean>(false);
+  const [subscriptionMessage, setSubscriptionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  // Computes the formatted candidate custom number
+  const candidateNumber = React.useMemo(() => {
+    const raw = customDigits.replace(/\D/g, '');
+    if (!raw) return '';
+    if (raw.length === 7) {
+      return `+1 (${customAreaCode}) ${raw.slice(0, 3)}-${raw.slice(3)}`;
+    }
+    if (raw.length === 10) {
+      return `+1 (${raw.slice(0, 3)}) ${raw.slice(3, 6)}-${raw.slice(6)}`;
+    }
+    if (raw.length === 11 && raw.startsWith('1')) {
+      return `+1 (${raw.slice(1, 4)}) ${raw.slice(4, 7)}-${raw.slice(7)}`;
+    }
+    if (raw.length <= 3) {
+      return `+1 (${customAreaCode}) ${raw}`;
+    }
+    return `+1 (${customAreaCode}) ${raw.slice(0, 3)}-${raw.slice(3)}`;
+  }, [customAreaCode, customDigits]);
+
+  const checkCustomNumberAvailability = async (numberToTest: string) => {
+    const digits = numberToTest.replace(/\D/g, '');
+    if (digits.length < 7) {
+      setCustomNumberStatus('invalid');
+      setCustomNumberError('Please enter at least 7 digits to verify availability.');
+      return;
+    }
+
+    setCheckingCustomNumber(true);
+    setCustomNumberError(null);
+    try {
+      const takenLocally = StorageService.isPhoneNumberTakenLocally(numberToTest, user.id);
+      if (takenLocally) {
+        setCustomNumberStatus('taken');
+        setCustomNumberError(`Custom number "${numberToTest}" is already taken by another subscriber on this device.`);
+        return;
+      }
+
+      const takenCloud = await FirebaseService.isPhoneNumberTaken(numberToTest, user.id);
+      if (takenCloud) {
+        setCustomNumberStatus('taken');
+        setCustomNumberError(`Custom number "${numberToTest}" is already claimed across the network.`);
+      } else {
+        setCustomNumberStatus('available');
+        setCustomNumberError(null);
+      }
+    } catch {
+      setCustomNumberStatus('available');
+    } finally {
+      setCheckingCustomNumber(false);
+    }
+  };
+
+  const handleApplyPreset = (preset: string) => {
+    const digits = preset.replace(/\D/g, '');
+    if (digits.length >= 10) {
+      const area = digits.length === 11 ? digits.slice(1, 4) : digits.slice(0, 3);
+      const rest = digits.length === 11 ? digits.slice(4) : digits.slice(3);
+      setCustomAreaCode(area);
+      const formattedRest = rest.length === 7 ? `${rest.slice(0, 3)}-${rest.slice(3)}` : rest;
+      setCustomDigits(formattedRest);
+      checkCustomNumberAvailability(preset);
+    }
+  };
+
+  const handleOpenCheckout = () => {
+    if (!candidateNumber) {
+      setCustomNumberError('Please enter your desired custom number.');
+      return;
+    }
+    if (customNumberStatus !== 'available') {
+      checkCustomNumberAvailability(candidateNumber);
+      if (customNumberStatus === 'taken' || customNumberStatus === 'invalid') {
+        return;
+      }
+    }
+    setShowCheckoutModal(true);
+  };
+
+  const handleConfirmAndActivate = async () => {
+    if (!candidateNumber) return;
+    const plan = CUSTOM_NUMBER_PLANS.find(p => p.id === selectedPlanId) || CUSTOM_NUMBER_PLANS[3];
+    setProcessingPayment(true);
+
+    try {
+      // Re-verify uniqueness
+      const takenLocally = StorageService.isPhoneNumberTakenLocally(candidateNumber, user.id);
+      const takenCloud = await FirebaseService.isPhoneNumberTaken(candidateNumber, user.id);
+      if (takenLocally || takenCloud) {
+        setCustomNumberStatus('taken');
+        setCustomNumberError(`Custom line "${candidateNumber}" was claimed concurrently. Please select a different number.`);
+        setProcessingPayment(false);
+        return;
+      }
+
+      const now = Date.now();
+      const expiresAt = now + plan.durationDays * 24 * 60 * 60 * 1000;
+      const txId = 'TXN_' + Math.random().toString(36).substring(2, 10).toUpperCase();
+
+      const subscription: CustomNumberSubscription = {
+        active: true,
+        customNumber: candidateNumber,
+        planId: plan.id,
+        planName: plan.name,
+        pricePaidRs: plan.priceRs,
+        activatedAt: now,
+        expiresAt: expiresAt,
+        transactionId: txId,
+        paymentMethod: paymentMethod === 'upi' ? `UPI (${upiIdInput})` : paymentMethod === 'card' ? 'Credit/Debit Card' : 'Net Banking',
+        autoRenew: true
+      };
+
+      const updatedPool = user.availableNumbersPool ? [...user.availableNumbersPool] : [];
+      if (!updatedPool.includes(candidateNumber)) {
+        updatedPool.unshift(candidateNumber);
+      }
+
+      const updatedUser: User = {
+        ...user,
+        assignedNumber: candidateNumber,
+        availableNumbersPool: updatedPool,
+        customNumberSubscription: subscription
+      };
+
+      StorageService.saveUser(updatedUser);
+      await FirebaseService.syncUserToCloud(updatedUser);
+      onUpdateUser(updatedUser);
+
+      setCustomNumberToggle(true);
+      setShowCheckoutModal(false);
+      setIsChangingNumber(false);
+      setSubscriptionMessage({
+        text: `VIP Custom line "${candidateNumber}" successfully reserved under ${plan.durationLabel} subscription (₹${plan.priceRs}). Active until ${new Date(expiresAt).toLocaleDateString()}.`,
+        type: 'success'
+      });
+
+      try {
+        soundEngine.playChime('verified');
+      } catch {}
+      setTimeout(() => setSubscriptionMessage(null), 8000);
+    } catch (e: any) {
+      setCustomNumberError('Activation error: ' + (e.message || 'Please retry'));
+    } finally {
+      setProcessingPayment(false);
+    }
+  };
+
+  const handleCancelCustomSubscription = async () => {
+    if (!user.customNumberSubscription) return;
+
+    // Pick standard pool line
+    const fallbackNumber = user.availableNumbersPool?.find(p => p !== user.customNumberSubscription?.customNumber)
+      || `+1 (800) ${Math.floor(100 + Math.random() * 900)}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const updatedUser: User = {
+      ...user,
+      assignedNumber: fallbackNumber,
+      customNumberSubscription: {
+        ...user.customNumberSubscription,
+        active: false
+      }
+    };
+
+    StorageService.saveUser(updatedUser);
+    await FirebaseService.syncUserToCloud(updatedUser);
+    onUpdateUser(updatedUser);
+    setCustomNumberToggle(false);
+    setIsChangingNumber(false);
+    setSubscriptionMessage({
+      text: `VIP custom number subscription deactivated. Active line reverted to ${fallbackNumber}.`,
+      type: 'success'
+    });
+    setTimeout(() => setSubscriptionMessage(null), 6000);
   };
 
   // --- 6. Cryptographic Key Rotation ---
@@ -922,12 +1170,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     {!checkingUsername && usernameAvailable === false && <AlertCircle className="w-3 h-3 text-red-400" />}
                   </div>
                 </div>
+                <span className="text-[8px] sm:text-[9px] text-neutral-500 font-mono block mt-1">
+                  Case-insensitive: uppercase &amp; lowercase variations cannot be re-used.
+                </span>
               </div>
 
               <div className="flex items-center justify-between pt-0.5">
                 <span className="text-[9px] font-mono text-neutral-400">
                   {usernameAvailable === true && <span className="text-emerald-400">Callsign is available</span>}
-                  {usernameAvailable === false && <span className="text-red-400">Taken or invalid</span>}
+                  {usernameAvailable === false && <span className="text-red-400">Already taken (case-insensitive)</span>}
                 </span>
 
                 <button
@@ -1102,6 +1353,371 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 );
               })}
             </div>
+          </div>
+
+          {/* Custom VIP Number (Premium Subscription) Card */}
+          <div className="bg-[#05070a] border border-amber-500/30 rounded-lg sm:rounded-xl p-3 sm:p-3.5 space-y-3 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-2xl pointer-events-none" />
+
+            {/* Header with Toggle Switch */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center space-x-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                  <Crown className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-[11px] sm:text-xs font-mono font-bold text-white uppercase tracking-wider truncate">
+                      Custom Number of Choice
+                    </h3>
+                    <span className="px-1.5 py-0.2 rounded bg-amber-500/20 border border-amber-500/40 text-[8px] font-mono text-amber-300 font-bold uppercase shrink-0">
+                      Paid VIP
+                    </span>
+                  </div>
+                  <p className="text-[9px] sm:text-[10px] text-neutral-400 font-mono mt-0.5 truncate">
+                    Choose your own personalized vanity number (e.g. 777-7777). Paid subscription tier.
+                  </p>
+                </div>
+              </div>
+
+              {/* Toggle Button */}
+              <div className="flex items-center space-x-2 shrink-0">
+                <span className="text-[9px] font-mono text-neutral-400 hidden sm:inline">
+                  {customNumberToggle ? 'ENABLED' : 'DISABLED'}
+                </span>
+                <button
+                  type="button"
+                  id="custom-number-toggle-btn"
+                  onClick={() => {
+                    if (user.customNumberSubscription?.active && customNumberToggle) {
+                      if (window.confirm(`Deactivate custom VIP number "${user.customNumberSubscription.customNumber}" and revert to standard number pool?`)) {
+                        handleCancelCustomSubscription();
+                      }
+                    } else {
+                      const next = !customNumberToggle;
+                      setCustomNumberToggle(next);
+                      if (next && !candidateNumber) {
+                        setCustomDigits('777-7777');
+                        checkCustomNumberAvailability(`+1 (${customAreaCode}) 777-7777`);
+                      }
+                    }
+                  }}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    customNumberToggle ? 'bg-amber-500' : 'bg-neutral-800'
+                  }`}
+                  role="switch"
+                  aria-checked={customNumberToggle}
+                  title="Toggle Custom Number Premium Feature"
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                      customNumberToggle ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Notification message */}
+            {subscriptionMessage && (
+              <div className={`p-2.5 rounded-lg border text-[10px] sm:text-xs font-mono flex items-center space-x-2 ${
+                subscriptionMessage.type === 'success'
+                  ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300'
+                  : 'bg-red-950/40 border-red-500/50 text-red-300'
+              }`}>
+                {subscriptionMessage.type === 'success' ? <CheckCircle className="w-3.5 h-3.5 shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
+                <span>{subscriptionMessage.text}</span>
+              </div>
+            )}
+
+            {/* Expanded Content when Toggle is Active */}
+            {customNumberToggle && (
+              <div className="pt-2 border-t border-neutral-800/80 space-y-3">
+                {/* Active Subscription View */}
+                {user.customNumberSubscription?.active && !isChangingNumber ? (
+                  <div className="bg-[#090d16] border border-amber-500/30 rounded-lg p-3 space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-neutral-800">
+                      <div>
+                        <span className="text-[9px] font-mono uppercase text-amber-400 font-bold block">
+                          Active Custom Line
+                        </span>
+                        <div className="flex items-center space-x-2 mt-0.5">
+                          <span className="text-sm sm:text-base font-mono font-bold text-white">
+                            {user.customNumberSubscription.customNumber}
+                          </span>
+                          <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-[8px] font-mono font-bold uppercase">
+                            Active VIP
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-left sm:text-right">
+                        <span className="text-[9px] font-mono text-neutral-400 block">
+                          Plan: <span className="text-white font-bold">{user.customNumberSubscription.planName}</span> (₹{user.customNumberSubscription.pricePaidRs})
+                        </span>
+                        <span className="text-[9px] font-mono text-neutral-400 block mt-0.5">
+                          Valid Until: <span className="text-amber-300 font-bold">{new Date(user.customNumberSubscription.expiresAt).toLocaleDateString()}</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsChangingNumber(true);
+                          checkCustomNumberAvailability(candidateNumber);
+                        }}
+                        className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-[10px] font-mono font-bold transition-colors cursor-pointer flex items-center space-x-1"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Change Custom Number</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsChangingNumber(true);
+                        }}
+                        className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-lg text-[10px] font-mono transition-colors cursor-pointer flex items-center space-x-1"
+                      >
+                        <Calendar className="w-3 h-3" />
+                        <span>Renew / Upgrade Plan</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleCancelCustomSubscription}
+                        className="px-2.5 py-1 bg-red-950/40 hover:bg-red-900/50 text-red-300 border border-red-800/40 rounded-lg text-[10px] font-mono transition-colors cursor-pointer flex items-center space-x-1 ml-auto"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Cancel Custom Line</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Custom Number Creator & Plan Selection */
+                  <div className="space-y-3">
+                    {isChangingNumber && user.customNumberSubscription?.active && (
+                      <div className="flex items-center justify-between pb-1">
+                        <span className="text-[10px] font-mono text-amber-400 font-bold">
+                          Configuring new custom line for active subscription...
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsChangingNumber(false)}
+                          className="text-[9px] font-mono text-neutral-400 hover:text-white cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Step 1: Number Customizer */}
+                    <div className="bg-[#080c14] border border-neutral-800 rounded-lg p-2.5 sm:p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-mono text-neutral-300 uppercase font-bold tracking-wider">
+                          1. Design Your Custom Virtual Number
+                        </label>
+                        <span className="text-[9px] font-mono text-neutral-500">Pick any digits</span>
+                      </div>
+
+                      {/* Area Code Pills */}
+                      <div className="flex items-center space-x-1.5 overflow-x-auto pb-1">
+                        <span className="text-[9px] font-mono text-neutral-500 shrink-0">Area Code:</span>
+                        {['800', '888', '877', '866', '855', '844', '833'].map((code) => (
+                          <button
+                            key={code}
+                            type="button"
+                            onClick={() => {
+                              setCustomAreaCode(code);
+                              const updated = formatCustomPhoneNumber(code, customDigits);
+                              checkCustomNumberAvailability(updated);
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                              customAreaCode === code
+                                ? 'bg-amber-500 text-neutral-950 shadow-sm'
+                                : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                            }`}
+                          >
+                            {code}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Custom Digits Input & Real-Time Availability */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div className="sm:col-span-2 relative">
+                          <input
+                            type="text"
+                            value={customDigits}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCustomDigits(val);
+                              const cleanDigits = val.replace(/\D/g, '');
+                              if (cleanDigits.length >= 7) {
+                                const formatted = cleanDigits.length === 7 
+                                  ? `+1 (${customAreaCode}) ${cleanDigits.slice(0, 3)}-${cleanDigits.slice(3)}`
+                                  : `+1 (${cleanDigits.slice(0, 3)}) ${cleanDigits.slice(3, 6)}-${cleanDigits.slice(6)}`;
+                                checkCustomNumberAvailability(formatted);
+                              } else {
+                                setCustomNumberStatus('invalid');
+                              }
+                            }}
+                            placeholder="e.g. 777-7777 or 123-4567"
+                            className="w-full bg-[#05070a] border border-neutral-700 focus:border-amber-500 rounded-lg px-3 py-1.5 text-xs font-mono text-white placeholder-neutral-600 focus:outline-none"
+                          />
+                          <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none">
+                            {checkingCustomNumber && <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />}
+                            {!checkingCustomNumber && customNumberStatus === 'available' && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                            {!checkingCustomNumber && customNumberStatus === 'taken' && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => checkCustomNumberAvailability(candidateNumber)}
+                          className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-lg text-[10px] font-mono font-bold transition-colors cursor-pointer flex items-center justify-center space-x-1"
+                        >
+                          <CheckSquare className="w-3 h-3 text-amber-400" />
+                          <span>Check Line</span>
+                        </button>
+                      </div>
+
+                      {/* Live Preview Display */}
+                      <div className="p-2 bg-[#05070a] border border-neutral-800/80 rounded-lg flex items-center justify-between text-xs font-mono">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[9px] text-neutral-500 uppercase">Preview:</span>
+                          <span className="font-bold text-white text-xs sm:text-sm tracking-wide">
+                            {candidateNumber || '+1 (800) ...'}
+                          </span>
+                        </div>
+
+                        <div>
+                          {customNumberStatus === 'available' && (
+                            <span className="text-[9px] text-emerald-400 font-bold flex items-center space-x-1">
+                              <CheckCircle className="w-3 h-3" />
+                              <span>Available for Reservation</span>
+                            </span>
+                          )}
+                          {customNumberStatus === 'taken' && (
+                            <span className="text-[9px] text-red-400 font-bold flex items-center space-x-1">
+                              <AlertTriangle className="w-3 h-3" />
+                              <span>Already Taken</span>
+                            </span>
+                          )}
+                          {customNumberStatus === 'invalid' && (
+                            <span className="text-[9px] text-amber-400">Enter at least 7 digits</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {customNumberError && (
+                        <p className="text-[9px] font-mono text-red-400">{customNumberError}</p>
+                      )}
+
+                      {/* Quick VIP Suggestions */}
+                      <div>
+                        <span className="text-[8px] font-mono text-neutral-500 uppercase block mb-1">
+                          Popular VIP Vanity Presets (Click to test):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {[
+                            '+1 (800) 777-7777',
+                            '+1 (888) 888-8888',
+                            '+1 (877) 123-4567',
+                            '+1 (866) 007-0007',
+                            '+1 (855) 999-9999',
+                            '+1 (800) 555-0199'
+                          ].map((preset) => (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => handleApplyPreset(preset)}
+                              className="px-2 py-0.5 bg-[#06080e] hover:bg-amber-950/30 border border-neutral-800 hover:border-amber-500/40 rounded text-[9px] font-mono text-neutral-300 hover:text-amber-300 transition-colors cursor-pointer"
+                            >
+                              {preset}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Step 2: Choose Plan (7days 25rs, 1month 100rs, 6months 500rs, 1year 800rs) */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-mono text-neutral-300 uppercase font-bold tracking-wider">
+                          2. Select VIP Subscription Plan
+                        </label>
+                        <span className="text-[9px] font-mono text-amber-400">All prices in Indian Rupees (₹)</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {CUSTOM_NUMBER_PLANS.map((plan) => {
+                          const isSelected = selectedPlanId === plan.id;
+                          return (
+                            <button
+                              key={plan.id}
+                              type="button"
+                              onClick={() => setSelectedPlanId(plan.id)}
+                              className={`p-2.5 rounded-lg border text-left font-mono transition-all cursor-pointer relative flex flex-col justify-between ${
+                                isSelected
+                                  ? 'bg-amber-950/40 border-amber-500 text-white shadow-md ring-1 ring-amber-500/60'
+                                  : 'bg-[#080c14] border-neutral-800 hover:border-neutral-700 text-neutral-300'
+                              }`}
+                            >
+                              {plan.badge && (
+                                <span className={`absolute -top-2 right-2 px-1 py-0.2 rounded text-[7px] font-bold uppercase font-mono ${
+                                  plan.popular ? 'bg-amber-500 text-neutral-950' : 'bg-neutral-800 text-cyan-300 border border-neutral-700'
+                                }`}>
+                                  {plan.badge}
+                                </span>
+                              )}
+                              <div>
+                                <span className="text-[10px] font-bold block">{plan.name}</span>
+                                <span className="text-[8px] text-neutral-400 block mt-0.5">{plan.durationLabel}</span>
+                              </div>
+                              <div className="mt-2 pt-1 border-t border-neutral-800/80 flex items-baseline justify-between">
+                                <span className="text-xs sm:text-sm font-bold text-amber-400">₹{plan.priceRs}</span>
+                                {plan.perMonthLabel && (
+                                  <span className="text-[8px] text-neutral-500">{plan.perMonthLabel}</span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Step 3: Checkout Action */}
+                    <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#080c14] border border-neutral-800/90 rounded-lg p-2.5">
+                      <div>
+                        <span className="text-[9px] font-mono text-neutral-400 block">Selected Order Summary:</span>
+                        <div className="flex items-center space-x-1.5 mt-0.5">
+                          <span className="text-xs font-mono font-bold text-white">
+                            {candidateNumber || '+1 (800) ...'}
+                          </span>
+                          <span className="text-[9px] font-mono text-neutral-500">·</span>
+                          <span className="text-xs font-mono font-bold text-amber-400">
+                            {CUSTOM_NUMBER_PLANS.find(p => p.id === selectedPlanId)?.durationLabel} for ₹{CUSTOM_NUMBER_PLANS.find(p => p.id === selectedPlanId)?.priceRs}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleOpenCheckout}
+                        disabled={customNumberStatus !== 'available' || checkingCustomNumber}
+                        className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-950 font-mono font-bold text-xs uppercase tracking-wider rounded-lg transition-all flex items-center justify-center space-x-1.5 shadow-[0_2px_12px_rgba(245,158,11,0.3)] cursor-pointer"
+                      >
+                        <CreditCard className="w-3.5 h-3.5 text-neutral-950" />
+                        <span>Proceed to VIP Checkout (₹{CUSTOM_NUMBER_PLANS.find(p => p.id === selectedPlanId)?.priceRs})</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1374,6 +1990,177 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   )}
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIP Custom Number Checkout Modal */}
+      {showCheckoutModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#090d16] border border-amber-500/40 rounded-xl sm:rounded-2xl max-w-md w-full p-4 sm:p-5 space-y-4 shadow-2xl font-mono text-neutral-100 relative">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center space-x-2">
+                <Crown className="w-5 h-5 text-amber-400" />
+                <h3 className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">
+                  VIP Custom Line Checkout
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCheckoutModal(false)}
+                className="p-1 text-neutral-400 hover:text-white rounded cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Invoice Line Item */}
+            <div className="bg-[#05070a] border border-neutral-800 rounded-lg p-3 space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Custom Virtual Line:</span>
+                <span className="font-bold text-amber-300">{candidateNumber}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Plan Duration:</span>
+                <span className="text-white font-bold">
+                  {CUSTOM_NUMBER_PLANS.find(p => p.id === selectedPlanId)?.name} ({CUSTOM_NUMBER_PLANS.find(p => p.id === selectedPlanId)?.durationLabel})
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Signaling Routing:</span>
+                <span className="text-emerald-400 font-bold">End-to-End Encrypted (E2EE)</span>
+              </div>
+              <div className="pt-2 border-t border-neutral-800 flex justify-between text-sm">
+                <span className="font-bold text-white">Total Amount Due:</span>
+                <span className="font-bold text-amber-400 text-base">₹{CUSTOM_NUMBER_PLANS.find(p => p.id === selectedPlanId)?.priceRs}</span>
+              </div>
+            </div>
+
+            {/* Payment Method Selector */}
+            <div className="space-y-2">
+              <label className="text-[10px] text-neutral-400 uppercase font-bold tracking-wider block">
+                Select Payment Method
+              </label>
+              <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('upi')}
+                  className={`p-2 rounded-lg border text-center font-bold transition-colors cursor-pointer ${
+                    paymentMethod === 'upi' ? 'bg-amber-500/20 border-amber-500 text-amber-300' : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  UPI (GPay/PhonePe)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('card')}
+                  className={`p-2 rounded-lg border text-center font-bold transition-colors cursor-pointer ${
+                    paymentMethod === 'card' ? 'bg-amber-500/20 border-amber-500 text-amber-300' : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Credit / Debit Card
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('netbanking')}
+                  className={`p-2 rounded-lg border text-center font-bold transition-colors cursor-pointer ${
+                    paymentMethod === 'netbanking' ? 'bg-amber-500/20 border-amber-500 text-amber-300' : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Net Banking
+                </button>
+              </div>
+
+              {paymentMethod === 'upi' ? (
+                <div>
+                  <label className="text-[9px] text-neutral-400 block mb-1">Enter UPI ID / VPA</label>
+                  <input
+                    type="text"
+                    value={upiIdInput}
+                    onChange={(e) => setUpiIdInput(e.target.value)}
+                    placeholder="user@oksbi"
+                    className="w-full bg-[#05070a] border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
+                  />
+                  <p className="text-[8px] text-neutral-500 mt-1">Instant simulated Indian payment gateway with zero surcharge.</p>
+                </div>
+              ) : paymentMethod === 'card' ? (
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-[9px] text-neutral-400 block mb-1">Card Number</label>
+                    <input
+                      type="text"
+                      value={cardNumberInput}
+                      onChange={(e) => setCardNumberInput(e.target.value)}
+                      className="w-full bg-[#05070a] border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[9px] text-neutral-400 block mb-1">Expiry (MM/YY)</label>
+                      <input
+                        type="text"
+                        value={cardExpiryInput}
+                        onChange={(e) => setCardExpiryInput(e.target.value)}
+                        className="w-full bg-[#05070a] border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-neutral-400 block mb-1">CVV</label>
+                      <input
+                        type="password"
+                        maxLength={4}
+                        value={cardCvvInput}
+                        onChange={(e) => setCardCvvInput(e.target.value)}
+                        className="w-full bg-[#05070a] border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-[9px] text-neutral-400 block mb-1">Select Bank</label>
+                  <select className="w-full bg-[#05070a] border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono">
+                    <option>HDFC Bank</option>
+                    <option>State Bank of India</option>
+                    <option>ICICI Bank</option>
+                    <option>Axis Bank</option>
+                    <option>Kotak Mahindra Bank</option>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {customNumberError && (
+              <p className="text-[9px] font-mono text-red-400">{customNumberError}</p>
+            )}
+
+            <div className="flex space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCheckoutModal(false)}
+                className="w-1/3 py-2 text-xs text-neutral-400 hover:text-white border border-neutral-800 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmAndActivate}
+                disabled={processingPayment}
+                className="w-2/3 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-neutral-950 font-bold text-xs uppercase tracking-wider rounded-lg transition-all flex items-center justify-center space-x-1.5 cursor-pointer shadow-lg disabled:opacity-50"
+              >
+                {processingPayment ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Processing Payment...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Pay ₹{CUSTOM_NUMBER_PLANS.find(p => p.id === selectedPlanId)?.priceRs} &amp; Activate</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

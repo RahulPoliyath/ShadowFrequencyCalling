@@ -28,6 +28,32 @@ export interface PrivacySettings {
   opusDtxEnabled?: boolean;
 }
 
+export type CustomNumberPlanId = '7days' | '1month' | '6months' | '1year';
+
+export interface CustomNumberPlan {
+  id: CustomNumberPlanId;
+  name: string;
+  durationLabel: string;
+  durationDays: number;
+  priceRs: number;
+  perMonthLabel?: string;
+  badge?: string;
+  popular?: boolean;
+}
+
+export interface CustomNumberSubscription {
+  active: boolean;
+  customNumber: string;
+  planId: CustomNumberPlanId;
+  planName: string;
+  pricePaidRs: number;
+  activatedAt: number;
+  expiresAt: number;
+  transactionId: string;
+  paymentMethod: string;
+  autoRenew: boolean;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -42,6 +68,7 @@ export interface User {
   privacySettings: PrivacySettings;
   termsAccepted?: boolean;
   termsAcceptedAt?: number;
+  customNumberSubscription?: CustomNumberSubscription;
 }
 
 export interface CallRecord {

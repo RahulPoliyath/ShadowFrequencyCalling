@@ -12,23 +12,28 @@ interface SplashScreenProps {
 }
 
 const BOOT_STEPS = [
-  { timeMs: 0, text: 'INITIALIZING ZERO-KNOWLEDGE NODE SANDBOX...', code: 'SEC-01' },
-  { timeMs: 1400, text: 'SAMPLING QUANTUM-SAFE CSPRNG ENTROPY POOL...', code: 'ENT-256' },
-  { timeMs: 2800, text: 'PRE-DERIVING ECDH P-256 & AES-GCM SESSION CIPHERS...', code: 'CIPH-OK' },
-  { timeMs: 4400, text: 'CALIBRATING 85HZ-7.8KHZ DSP NOISE GATE & ACOUSTIC AEC...', code: 'DSP-VAD' },
-  { timeMs: 5800, text: 'ENGAGING RFC1918 PRIVATE LAN IP LEAK SUPPRESSOR...', code: 'NET-STEALTH' },
-  { timeMs: 7000, text: 'CRYPTOGRAPHIC AUDIT PASSED: ZERO VULNERABILITIES DETECTED', code: 'AUDIT-PASS' },
-  { timeMs: 7800, text: 'SYSTEM ARMED • DECRYPTING INTERFACE...', code: 'READY' },
+  { pct: 0, text: 'INITIALIZING ZERO-KNOWLEDGE NODE SANDBOX...', code: 'SEC-01' },
+  { pct: 20, text: 'SAMPLING QUANTUM-SAFE CSPRNG ENTROPY POOL...', code: 'ENT-256' },
+  { pct: 40, text: 'PRE-DERIVING ECDH P-256 & AES-GCM SESSION CIPHERS...', code: 'CIPH-OK' },
+  { pct: 60, text: 'CALIBRATING DSP NOISE GATE & ACOUSTIC AEC...', code: 'DSP-VAD' },
+  { pct: 80, text: 'ENGAGING RFC1918 PRIVATE LAN IP LEAK SUPPRESSOR...', code: 'NET-STEALTH' },
+  { pct: 95, text: 'SYSTEM ARMED • DECRYPTING INTERFACE...', code: 'READY' },
 ];
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(8);
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(1);
   const [progress, setProgress] = useState<number>(0);
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
 
   useEffect(() => {
+    // If already booted in this browser session, skip immediately
+    if (typeof window !== 'undefined' && sessionStorage.getItem('sf_boot_done')) {
+      onComplete();
+      return;
+    }
+
     const startTime = Date.now();
-    const totalDurationMs = 8000;
+    const totalDurationMs = 1000;
 
     const interval = setInterval(() => {
       const elapsed = Date.now() - startTime;
@@ -39,24 +44,26 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
       setSecondsRemaining(secLeft);
 
       // Check which boot message should be displayed
-      const stepIdx = BOOT_STEPS.slice().reverse().findIndex(s => elapsed >= s.timeMs);
+      const stepIdx = BOOT_STEPS.slice().reverse().findIndex(s => pct >= s.pct);
       if (stepIdx !== -1) {
         setCurrentStepIndex(BOOT_STEPS.length - 1 - stepIdx);
       }
 
       if (elapsed >= totalDurationMs) {
         clearInterval(interval);
+        sessionStorage.setItem('sf_boot_done', '1');
         try {
           soundEngine.playChime('verified');
         } catch {}
         onComplete();
       }
-    }, 40);
+    }, 25);
 
     return () => clearInterval(interval);
   }, [onComplete]);
 
   const handleSkip = () => {
+    sessionStorage.setItem('sf_boot_done', '1');
     try {
       soundEngine.playChime('connected');
     } catch {}

@@ -39,6 +39,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   const [phonePool, setPhonePool] = useState<string[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<string>('');
   const [loadingNumbers, setLoadingNumbers] = useState(false);
+  const [debounceTimer, setDebounceTimer] = useState<any>(null);
   
   // Error & Status State
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +71,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
     setUsername(val);
     setError(null);
     setUsernameAvailable(null);
+
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+
+    if (!isLogin && val.trim().length >= 3) {
+      const timer = setTimeout(() => {
+        checkUsernameAvailability(val);
+      }, 350);
+      setDebounceTimer(timer);
+    }
   };
 
   const checkUsernameAvailability = async (targetUsername?: string) => {
     if (isLogin) return;
-    const clean = (targetUsername || username).trim().toLowerCase();
+    const clean = (targetUsername !== undefined ? targetUsername : username).trim().toLowerCase().replace(/^@/, '');
     if (clean.length < 3) {
       setUsernameAvailable(null);
       return;
@@ -82,18 +94,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
 
     setCheckingUsername(true);
     try {
-      // 1. Check local database
+      // 1. Check local database (case-insensitive)
       if (StorageService.isUsernameTakenLocally(clean)) {
         setUsernameAvailable(false);
-        setError(`Username alias "@${clean}" is already registered on this device.`);
+        setError(`Username alias "@${clean}" is already registered (case-insensitive). It cannot be used by anyone else.`);
         return;
       }
 
-      // 2. Check Cloud Firestore registry
+      // 2. Check Cloud Firestore registry (case-insensitive)
       const isTaken = await FirebaseService.isUsernameTaken(clean);
       if (isTaken) {
         setUsernameAvailable(false);
-        setError(`Username alias "@${clean}" is already taken across the network. Choose another alias.`);
+        setError(`Username alias "@${clean}" is already taken across the network (case-insensitive). It cannot be used by anyone else.`);
       } else {
         setUsernameAvailable(true);
         setError(null);
@@ -188,7 +200,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
         // 1. Check local storage
         if (StorageService.isUsernameTakenLocally(cleanUsername)) {
           setUsernameAvailable(false);
-          setError(`Username alias "@${cleanUsername}" is already taken. Please choose a different username.`);
+          setError(`Username alias "@${cleanUsername}" is already taken (usernames are case-insensitive). Please choose a different username.`);
           setLoading(false);
           return;
         }
@@ -197,7 +209,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
         const isTaken = await FirebaseService.isUsernameTaken(cleanUsername);
         if (isTaken) {
           setUsernameAvailable(false);
-          setError(`Username alias "@${cleanUsername}" is already taken across the network. Please choose a different username.`);
+          setError(`Username alias "@${cleanUsername}" is already taken across the network (usernames are case-insensitive). Please choose a different username.`);
           setLoading(false);
           return;
         }
@@ -215,32 +227,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   };
 
   const handleCompleteRegistration = async () => {
-    if (!selectedNumber) {
-      setError('Please select one of the 5 assigned virtual private numbers.');
-      return;
-    }
-
     setLoading(true);
+    setError(null);
     try {
       const cleanUsername = username.trim().toLowerCase().replace(/^@/, '');
+      const finalNumber = selectedNumber || phonePool[0] || generatePhoneNumberPool()[0];
 
-      // 1. Final atomic uniqueness check for username
+      // 1. Fast local uniqueness check
       const isUsernameTakenLocally = StorageService.isUsernameTakenLocally(cleanUsername);
-      const isUsernameTakenCloud = await FirebaseService.isUsernameTaken(cleanUsername);
-      if (isUsernameTakenLocally || isUsernameTakenCloud) {
-        setError(`Username alias "@${cleanUsername}" is already taken. It cannot be assigned to any other user.`);
+      if (isUsernameTakenLocally) {
+        setError(`Username alias "@${cleanUsername}" is already taken on this device (usernames are case-insensitive). Please choose a different username.`);
         setStep('credentials');
         setUsernameAvailable(false);
-        setLoading(false);
-        return;
-      }
-
-      // 2. Final atomic uniqueness check for virtual phone number
-      const isNumberTakenLocally = StorageService.isPhoneNumberTakenLocally(selectedNumber);
-      const isNumberTakenCloud = await FirebaseService.isPhoneNumberTaken(selectedNumber);
-      if (isNumberTakenLocally || isNumberTakenCloud) {
-        setError(`Virtual number "${selectedNumber}" is already taken and cannot be assigned to any other user. Refreshing pool with new available numbers...`);
-        await refreshNumberPool();
         setLoading(false);
         return;
       }
@@ -278,8 +276,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
         username: cleanUsername,
         passwordHash,
         salt,
-        assignedNumber: selectedNumber,
-        availableNumbersPool: phonePool,
+        assignedNumber: finalNumber,
+        availableNumbersPool: phonePool.length > 0 ? phonePool : [finalNumber],
         createdAt: Date.now(),
         publicKeySpki,
         keyFingerprint,
@@ -289,9 +287,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
         termsAcceptedAt: Date.now(),
       };
 
-      // Claim unique username reservation and sync user to Firestore
-      await FirebaseService.claimUsername(cleanUsername, newUser.id, selectedNumber);
-      await FirebaseService.syncUserToCloud(newUser);
+      // 2. Immediately commit user to local device enclave so user is NEVER stuck
       StorageService.saveUser(newUser);
       StorageService.setCurrentUser(newUser.id);
 
@@ -303,6 +299,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
         severity: 'success'
       });
 
+      // 3. Non-blocking cloud synchronization in background
+      Promise.all([
+        FirebaseService.claimUsername(cleanUsername, newUser.id, finalNumber),
+        FirebaseService.syncUserToCloud(newUser)
+      ]).catch((err) => {
+        console.warn('Background registration cloud sync notice:', err);
+      });
+
+      // 4. Complete registration and activate session immediately
       onSuccess(newUser);
     } catch (err: any) {
       setError('Account initialization failed: ' + (err.message || 'Crypto error'));
@@ -316,7 +321,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
       <div id="auth-modal-overlay" className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-2xl p-3 sm:p-4 tech-grid-bg">
         <TermsAndConditionsModal
           onAccept={handleCompleteRegistration}
-          onDecline={() => setStep('number-select')}
+          onDecline={() => {
+            setError(null);
+            setStep('number-select');
+          }}
+          error={error}
+          loading={loading}
         />
       </div>
     );
@@ -397,7 +407,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
                     ) : usernameAvailable === false ? (
                       <span className="text-red-400 flex items-center space-x-0.5">
                         <AlertTriangle className="w-3 h-3" />
-                        <span>Already Taken</span>
+                        <span>Already Taken (Case-Insensitive)</span>
                       </span>
                     ) : null}
                   </span>
@@ -422,7 +432,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
               />
               <p className="text-[9px] sm:text-[10px] text-neutral-500 mt-1 font-mono">
                 {!isLogin 
-                  ? 'Usernames must be unique across all network operatives.' 
+                  ? 'Usernames are case-insensitive (e.g. "Alice" and "alice" are identical and cannot be claimed by anyone else).' 
                   : 'No phone, email, or identity verification required.'}
               </p>
             </div>

@@ -12,17 +12,16 @@ interface LogoutSplashScreenProps {
 }
 
 const PURGE_STEPS = [
-  { timeMs: 0, text: 'DISENGAGING WEBRTC AUDIO ENCLAVE & ICE CHANNELS...', code: 'NET-HALT' },
-  { timeMs: 1400, text: 'OVERWRITING ZERO-KNOWLEDGE RAM BUFFERS WITH ZERO-FILL...', code: 'MEM-SCRUB' },
-  { timeMs: 2800, text: 'SHREDDING EPHEMERAL ECDH P-256 SESSION CIPHERS...', code: 'KEY-SHRED' },
-  { timeMs: 4400, text: 'PURGING LOCAL ENCRYPTED KEYSTORE & CACHED TOKENS...', code: 'CACHE-DEL' },
-  { timeMs: 5800, text: 'NOTIFYING NODE DISCONNECT TO SIGNALING MESH...', code: 'MESH-EXIT' },
-  { timeMs: 7000, text: 'AUDIT LEDGER COMMITTED: ZERO FORENSIC TRACES REMAINING', code: 'AMNESIC-OK' },
-  { timeMs: 7800, text: 'TERMINAL PURGE COMPLETE • RETURN TO AUTH ENCLAVE...', code: 'CLEAN' },
+  { pct: 0, text: 'DISENGAGING WEBRTC AUDIO ENCLAVE & ICE CHANNELS...', code: 'NET-HALT' },
+  { pct: 20, text: 'OVERWRITING RAM BUFFERS WITH ZERO-FILL...', code: 'MEM-SCRUB' },
+  { pct: 40, text: 'SHREDDING EPHEMERAL ECDH P-256 SESSION CIPHERS...', code: 'KEY-SHRED' },
+  { pct: 60, text: 'PURGING LOCAL ENCRYPTED KEYSTORE & CACHED TOKENS...', code: 'CACHE-DEL' },
+  { pct: 80, text: 'NOTIFYING NODE DISCONNECT TO SIGNALING MESH...', code: 'MESH-EXIT' },
+  { pct: 95, text: 'TERMINAL PURGE COMPLETE • RETURN TO AUTH ENCLAVE...', code: 'CLEAN' },
 ];
 
 export const LogoutSplashScreen: React.FC<LogoutSplashScreenProps> = ({ onComplete }) => {
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(8);
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(1);
   const [progress, setProgress] = useState<number>(0);
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
 
@@ -33,7 +32,7 @@ export const LogoutSplashScreen: React.FC<LogoutSplashScreenProps> = ({ onComple
     } catch {}
 
     const startTime = Date.now();
-    const totalDurationMs = 8000;
+    const totalDurationMs = 1000;
 
     const interval = setInterval(() => {
       const elapsed = Date.now() - startTime;
@@ -44,7 +43,7 @@ export const LogoutSplashScreen: React.FC<LogoutSplashScreenProps> = ({ onComple
       setSecondsRemaining(secLeft);
 
       // Advance through purge sequence steps
-      const stepIdx = PURGE_STEPS.slice().reverse().findIndex(s => elapsed >= s.timeMs);
+      const stepIdx = PURGE_STEPS.slice().reverse().findIndex(s => pct >= s.pct);
       if (stepIdx !== -1) {
         setCurrentStepIndex(PURGE_STEPS.length - 1 - stepIdx);
       }
@@ -56,7 +55,7 @@ export const LogoutSplashScreen: React.FC<LogoutSplashScreenProps> = ({ onComple
         } catch {}
         onComplete();
       }
-    }, 40);
+    }, 25);
 
     return () => clearInterval(interval);
   }, [onComplete]);

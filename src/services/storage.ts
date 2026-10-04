@@ -59,12 +59,13 @@ export class StorageService {
   static isUsernameTakenLocally(username: string, excludeUserId?: string): boolean {
     const clean = username.trim().toLowerCase().replace(/^@/, '');
     if (!clean) return false;
-    // Check system registered users
-    if (SYSTEM_REGISTERED_USERS.some(s => s.username.toLowerCase() === clean && (!excludeUserId || s.id !== excludeUserId))) {
+    // Check system registered users (case-insensitive)
+    if (SYSTEM_REGISTERED_USERS.some(s => s.username.trim().toLowerCase().replace(/^@/, '') === clean && (!excludeUserId || s.id !== excludeUserId))) {
       return true;
     }
+    // Check local storage registered users (case-insensitive)
     const users = this.getUsers();
-    return users.some(u => u.username.trim().toLowerCase() === clean && (!excludeUserId || u.id !== excludeUserId));
+    return users.some(u => u.username.trim().toLowerCase().replace(/^@/, '') === clean && (!excludeUserId || u.id !== excludeUserId));
   }
 
   static isPhoneNumberTakenLocally(phone: string, excludeUserId?: string): boolean {

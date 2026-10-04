@@ -17,6 +17,13 @@
     scroll-behavior: smooth;
   }
 
+  /* 15% overall UI reduction for mobile (smartphone) users */
+  @media (max-width: 640px) {
+    html {
+      font-size: 85% !important; /* Reduces all rem-based typography, spacing, gaps, icons, and components by 15% */
+    }
+  }
+
   body {
     background-color: #06070a;
     color: #e2e8f0;

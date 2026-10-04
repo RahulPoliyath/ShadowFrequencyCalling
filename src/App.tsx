@@ -722,57 +722,57 @@ export default function App() {
       {/* Fixed Mobile Bottom Navigation Anchor (Thumb-Zone) */}
       <nav 
         aria-label="Mobile Navigation" 
-        className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#07090e]/95 backdrop-blur-xl border-t border-neutral-800/80 px-4 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center justify-around"
+        className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#07090e]/95 backdrop-blur-xl border-t border-neutral-800/80 px-3 py-1.5 pb-[max(0.4rem,env(safe-area-inset-bottom))] flex items-center justify-around"
       >
         <button
           type="button"
           onClick={() => setActiveTab('dialer')}
-          className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] transition-all cursor-pointer ${
+          className={`flex flex-col items-center justify-center min-w-[48px] min-h-[38px] transition-all cursor-pointer ${
             activeTab === 'dialer' ? 'text-emerald-400 scale-105' : 'text-neutral-500 hover:text-neutral-300'
           }`}
         >
-          <Phone className="w-5 h-5 mb-0.5" />
-          <span className="text-[10px] font-mono tracking-tight font-medium">Dialer</span>
+          <Phone className="w-4.5 h-4.5 mb-0.5" />
+          <span className="text-[9px] font-mono tracking-tight font-medium">Dialer</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('history')}
-          className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] relative transition-all cursor-pointer ${
+          className={`flex flex-col items-center justify-center min-w-[48px] min-h-[38px] relative transition-all cursor-pointer ${
             activeTab === 'history' ? 'text-cyan-400 scale-105' : 'text-neutral-500 hover:text-neutral-300'
           }`}
         >
           <div className="relative">
-            <History className="w-5 h-5 mb-0.5" />
+            <History className="w-4.5 h-4.5 mb-0.5" />
             {callRecords.length > 0 && (
-              <span className="absolute -top-1 -right-2 text-[9px] bg-neutral-800 border border-neutral-700 text-neutral-300 px-1 rounded-full font-mono">
+              <span className="absolute -top-1 -right-2 text-[8px] bg-neutral-800 border border-neutral-700 text-neutral-300 px-1 rounded-full font-mono">
                 {callRecords.length}
               </span>
             )}
           </div>
-          <span className="text-[10px] font-mono tracking-tight font-medium">Ledger</span>
+          <span className="text-[9px] font-mono tracking-tight font-medium">Ledger</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('privacy')}
-          className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] transition-all cursor-pointer ${
+          className={`flex flex-col items-center justify-center min-w-[48px] min-h-[38px] transition-all cursor-pointer ${
             activeTab === 'privacy' ? 'text-emerald-400 scale-105' : 'text-neutral-500 hover:text-neutral-300'
           }`}
         >
-          <Shield className="w-5 h-5 mb-0.5" />
-          <span className="text-[10px] font-mono tracking-tight font-medium">Defense</span>
+          <Shield className="w-4.5 h-4.5 mb-0.5" />
+          <span className="text-[9px] font-mono tracking-tight font-medium">Defense</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('settings')}
-          className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] transition-all cursor-pointer ${
+          className={`flex flex-col items-center justify-center min-w-[48px] min-h-[38px] transition-all cursor-pointer ${
             activeTab === 'settings' ? 'text-cyan-400 scale-105' : 'text-neutral-500 hover:text-neutral-300'
           }`}
         >
-          <Sliders className="w-5 h-5 mb-0.5" />
-          <span className="text-[10px] font-mono tracking-tight font-medium">Settings</span>
+          <Sliders className="w-4.5 h-4.5 mb-0.5" />
+          <span className="text-[9px] font-mono tracking-tight font-medium">Settings</span>
         </button>
       </nav>
 

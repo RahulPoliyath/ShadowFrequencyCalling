@@ -9,7 +9,7 @@ import {
   Check, Smartphone, Laptop, Sparkles, Bell, Wifi, Radio, User as UserIcon, Bot, Sliders, Crown
 } from 'lucide-react';
 import { 
-  User, CallRecord, ActiveCallState, DeviceSession, PrivacySettings 
+  User, CallRecord, ActiveCallState, DeviceSession, PrivacySettings, CallStatus 
 } from './types';
 import { StorageService } from './services/storage';
 import { soundEngine } from './services/audio';
@@ -86,7 +86,19 @@ export default function App() {
           const myDigits = current.assignedNumber.replace(/\D/g, '');
           const target10 = targetDigits.slice(-10);
           const my10 = myDigits.slice(-10);
-          const matches = payload.targetNumber === current.assignedNumber ||
+          const currentUsername = (current.username || '').toLowerCase().replace(/^@/, '');
+          const targetUsername = (payload.targetUsername || '').toLowerCase().replace(/^@/, '');
+
+          // Do not ring own device
+          const isOwn = 
+            payload.callerNumber === current.assignedNumber ||
+            (payload.callerAlias && payload.callerAlias.toLowerCase() === `@${currentUsername}`);
+          if (isOwn) return;
+
+          const matches = 
+            (payload.targetUserId && payload.targetUserId === current.id) ||
+            (targetUsername && currentUsername && targetUsername === currentUsername) ||
+            payload.targetNumber === current.assignedNumber ||
             (target10.length === 10 && my10.length === 10 && target10 === my10) ||
             (targetDigits.length >= 7 && (myDigits === targetDigits || myDigits.endsWith(targetDigits) || targetDigits.endsWith(myDigits)));
           if (matches) {
@@ -123,17 +135,73 @@ export default function App() {
     });
 
     // Real-time incoming call alerts from remote devices worldwide
-    const unsubSignals = FirebaseService.subscribeToIncomingCalls(currentUser.assignedNumber, (call) => {
-      setIncomingCall(call);
-      soundEngine.startRinging(true);
-      triggerInAppNotification(`Incoming encrypted call for ${currentUser.assignedNumber}`);
-    });
+    const unsubSignals = FirebaseService.subscribeToIncomingCalls(
+      { id: currentUser.id, username: currentUser.username, assignedNumber: currentUser.assignedNumber },
+      (call) => {
+        setIncomingCall(call);
+        soundEngine.startRinging(true);
+        triggerInAppNotification(`Incoming encrypted call for ${currentUser.assignedNumber}`);
+      }
+    );
 
     return () => {
       unsubRecords();
       unsubSignals();
     };
-  }, [currentUser?.id, currentUser?.assignedNumber]);
+  }, [currentUser?.id, currentUser?.assignedNumber, currentUser?.username]);
+
+  // Real-time call status handler for active call (ring, accept, decline, end)
+  useEffect(() => {
+    if (!activeCall) return;
+
+    const handleRemoteStatus = (status: 'call_decline' | 'call_accept' | 'call_end') => {
+      if (status === 'call_accept') {
+        // Callee accepted! Stop ringing, connect audio
+        soundEngine.stopRinging();
+        soundEngine.playChime('connected');
+        setActiveCall(prev => prev ? { ...prev, status: 'connected', startedAt: Date.now() } : null);
+      } else if (status === 'call_decline') {
+        // Callee declined or cancelled
+        soundEngine.stopRinging();
+        soundEngine.playChime('disconnected');
+        triggerInAppNotification('Call declined by recipient');
+        handleEndCall(false, 'rejected');
+      } else if (status === 'call_end') {
+        // Remote peer hung up
+        soundEngine.stopRinging();
+        soundEngine.playChime('disconnected');
+        triggerInAppNotification('Call ended by remote peer');
+        handleEndCall(false, 'completed');
+      }
+    };
+
+    // 1. Cloud Firestore call status listener
+    const unsubCloud = FirebaseService.subscribeToCallStatus(activeCall.roomNumber, handleRemoteStatus);
+
+    // 2. Local BroadcastChannel listener (multi-tab testing)
+    const unsubBroadcast = StorageService.subscribeSync((data) => {
+      if (data.action === 'CALL_STATUS' && data.payload?.roomNumber === activeCall.roomNumber) {
+        handleRemoteStatus(data.payload.status);
+      }
+    });
+
+    // 3. Ringing timeout (45 seconds)
+    let ringTimeout: any = null;
+    if (activeCall.status === 'ringing') {
+      ringTimeout = setTimeout(() => {
+        soundEngine.stopRinging();
+        soundEngine.playChime('disconnected');
+        triggerInAppNotification('No answer from recipient');
+        handleEndCall(true, 'missed');
+      }, 45000);
+    }
+
+    return () => {
+      unsubCloud();
+      unsubBroadcast();
+      if (ringTimeout) clearTimeout(ringTimeout);
+    };
+  }, [activeCall?.roomNumber, activeCall?.status]);
 
   const triggerInAppNotification = (msg: string) => {
     setNotificationPrompt(msg);
@@ -155,6 +223,8 @@ export default function App() {
     // If it's a virtual phone number, verify registration
     let remoteNumber = trimmed;
     let remoteAlias = 'Anonymous Peer';
+    let targetUserId = '';
+    let targetUsername = '';
 
     if (!isRoom) {
       // Check if user is dialing their own assigned number or alias
@@ -183,19 +253,25 @@ export default function App() {
       }
       if (registeredUser) {
         StorageService.saveUser(registeredUser);
+        remoteNumber = registeredUser.assignedNumber;
+        remoteAlias = `@${registeredUser.username}`;
+        targetUserId = registeredUser.id;
+        targetUsername = registeredUser.username;
+      } else {
+        // If not found in directory:
+        // If it's a valid 10-digit number or phone string format, allow dialing to mesh subscriber:
+        const cleanDigits = trimmed.replace(/\D/g, '');
+        if (cleanDigits.length >= 10) {
+          remoteNumber = trimmed;
+          remoteAlias = 'Encrypted Subscriber';
+        } else {
+          soundEngine.playChime('disconnected');
+          return {
+            success: false,
+            error: `Call Failed: "${trimmed}" is not registered on the ShadowFrequency network. Only verified subscribers in the network directory can be reached.`,
+          };
+        }
       }
-
-      // If not registered: Reject the call immediately and give error
-      if (!registeredUser) {
-        soundEngine.playChime('disconnected');
-        return {
-          success: false,
-          error: `Call Failed: "${trimmed}" is not registered on the ShadowFrequency network. Only verified subscribers in the network directory can be reached.`,
-        };
-      }
-
-      remoteNumber = registeredUser.assignedNumber;
-      remoteAlias = `@${registeredUser.username}`;
     } else {
       remoteNumber = trimmed.toUpperCase();
       remoteAlias = 'Encrypted Conference Room';
@@ -203,7 +279,6 @@ export default function App() {
 
     // Number is valid and registered (or audio room): initiate call
     soundEngine.playChime('connected');
-    soundEngine.startRinging(false);
 
     // Generate ephemeral ECDH key pair for this call session
     const localKeyPair = await generateEcdhKeyPair();
@@ -217,12 +292,14 @@ export default function App() {
 
     const { code, emojis } = deriveSasTokens(localFingerprint, peerFingerprint);
 
+    const roomNumber = isRoom ? trimmed : `#ROOM-${Math.floor(1000 + Math.random() * 9000)}`;
+
     const newCall: ActiveCallState = {
-      roomNumber: isRoom ? trimmed : `#ROOM-${Math.floor(100 + Math.random() * 900)}`,
+      roomNumber,
       remoteNumber,
       remoteAlias,
       direction: 'outbound',
-      status: 'connected',
+      status: isRoom ? 'connected' : 'ringing', // Conference rooms connect directly; peer calls ring until answered!
       startedAt: Date.now(),
       duration: 0,
       isMuted: false,
@@ -231,28 +308,34 @@ export default function App() {
       sasEmojis: emojis,
       keyFingerprint: localFingerprint,
       isVerified: false,
-      packetsSent: 120,
-      packetsReceived: 118,
+      packetsSent: 0,
+      packetsReceived: 0,
       latencyMs: 14,
       bitrateKbps: 48,
     };
 
-    setTimeout(() => {
-      soundEngine.stopRinging();
-      setActiveCall(newCall);
-    }, 1100);
+    setActiveCall(newCall);
 
     if (!isRoom) {
+      // Start ringing sound for caller
+      soundEngine.startRinging(false);
+
+      // Dispatch real-time call offer to Cloud Firestore
       FirebaseService.dispatchCallSignal({
         targetNumber: remoteNumber,
+        targetUsername,
+        targetUserId,
         callerNumber: currentUser.assignedNumber,
         callerAlias: `@${currentUser.username}`,
         roomNumber: newCall.roomNumber,
         type: 'call_offer'
-      }).catch(() => {});
+      }).catch((e) => console.warn('Call offer dispatch notice:', e));
 
+      // Broadcast locally for multi-tab testing
       StorageService.broadcastSync('INCOMING_CALL_SIGNAL', {
         targetNumber: remoteNumber,
+        targetUsername,
+        targetUserId,
         callerNumber: currentUser.assignedNumber,
         callerAlias: `@${currentUser.username}`,
         roomNumber: newCall.roomNumber,
@@ -267,14 +350,33 @@ export default function App() {
     setActiveCall(prev => (prev ? updater(prev) : null));
   };
 
-  const handleEndCall = () => {
+  const handleEndCall = (notifyRemote = true, customStatus?: 'completed' | 'missed' | 'rejected') => {
     if (!activeCall || !currentUser) return;
 
+    soundEngine.stopRinging();
     webRtcManager.cleanup();
     soundEngine.cleanupCallAudio();
     soundEngine.playChime('disconnected');
 
-    const duration = activeCall.duration;
+    if (notifyRemote && !activeCall.roomNumber.toUpperCase().includes('ROOM')) {
+      // Notify remote peer of call termination
+      FirebaseService.dispatchCallSignal({
+        targetNumber: activeCall.remoteNumber,
+        callerNumber: currentUser.assignedNumber,
+        callerAlias: `@${currentUser.username}`,
+        roomNumber: activeCall.roomNumber,
+        type: activeCall.status === 'ringing' ? 'call_decline' : 'call_end'
+      }).catch(() => {});
+
+      StorageService.broadcastSync('CALL_STATUS', {
+        roomNumber: activeCall.roomNumber,
+        status: activeCall.status === 'ringing' ? 'call_decline' : 'call_end'
+      });
+    }
+
+    const duration = activeCall.status === 'connected' ? activeCall.duration : 0;
+    const recordStatus: CallStatus = customStatus || (activeCall.status === 'connected' ? 'completed' : 'missed');
+
     const record: CallRecord = {
       id: 'rec_' + Math.random().toString(36).substring(2, 9),
       remoteNumber: activeCall.remoteNumber,
@@ -283,7 +385,7 @@ export default function App() {
       direction: activeCall.direction,
       duration,
       timestamp: Date.now() - duration * 1000,
-      status: 'completed',
+      status: recordStatus,
       deviceOrigin: 'Active Terminal',
       encryptionDetails: {
         cipher: 'AES-256-GCM (256-bit)',
@@ -315,6 +417,7 @@ export default function App() {
     };
 
     setIncomingCall(simCall);
+    soundEngine.startRinging(true);
     StorageService.broadcastSync('INCOMING_CALL_SIGNAL', simCall);
   };
 
@@ -353,6 +456,20 @@ export default function App() {
       bitrateKbps: 48,
     };
 
+    // Dispatch call_accept to remote caller so caller transitions to connected
+    FirebaseService.dispatchCallSignal({
+      targetNumber: incomingCall.callerNumber,
+      callerNumber: currentUser.assignedNumber,
+      callerAlias: `@${currentUser.username}`,
+      roomNumber: incomingCall.roomNumber,
+      type: 'call_accept'
+    }).catch(() => {});
+
+    StorageService.broadcastSync('CALL_STATUS', {
+      roomNumber: incomingCall.roomNumber,
+      status: 'call_accept'
+    });
+
     if (incomingCall.signalId) {
       FirebaseService.clearSignal(incomingCall.signalId);
     }
@@ -362,7 +479,21 @@ export default function App() {
 
   const handleDeclineIncomingCall = () => {
     soundEngine.stopRinging();
-    if (incomingCall) {
+    if (incomingCall && currentUser) {
+      // Dispatch call_decline to remote caller so caller knows call was rejected
+      FirebaseService.dispatchCallSignal({
+        targetNumber: incomingCall.callerNumber,
+        callerNumber: currentUser.assignedNumber,
+        callerAlias: `@${currentUser.username}`,
+        roomNumber: incomingCall.roomNumber,
+        type: 'call_decline'
+      }).catch(() => {});
+
+      StorageService.broadcastSync('CALL_STATUS', {
+        roomNumber: incomingCall.roomNumber,
+        status: 'call_decline'
+      });
+
       if (incomingCall.signalId) {
         FirebaseService.clearSignal(incomingCall.signalId);
       }

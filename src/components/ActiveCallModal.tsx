@@ -41,30 +41,38 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
     const isEcho = call.remoteNumber.includes('555-0199') || call.remoteAlias.toLowerCase().includes('echo');
     const isInitiator = call.direction === 'outbound';
 
-    webRtcManager.startCallSession({
-      roomId: call.roomNumber,
-      isInitiator,
-      isEchoNode: isEcho,
-      onRemoteAudioActive: () => {
-        onUpdateCall(prev => ({ ...prev, status: 'connected' }));
-      }
-    });
+    // Start WebRTC session when connected (or when echo node/room)
+    if (call.status === 'connected' || isEcho) {
+      webRtcManager.startCallSession({
+        roomId: call.roomNumber,
+        isInitiator,
+        isEchoNode: isEcho,
+        onRemoteAudioActive: () => {
+          onUpdateCall(prev => ({ ...prev, status: 'connected' }));
+        }
+      });
+    }
 
-    const timer = setInterval(() => {
-      onUpdateCall(prev => ({
-        ...prev,
-        duration: prev.duration + 1,
-        packetsSent: prev.packetsSent + Math.floor(Math.random() * 5 + 48),
-        packetsReceived: prev.packetsReceived + Math.floor(Math.random() * 5 + 48),
-        latencyMs: Math.floor(10 + Math.random() * 5),
-      }));
-    }, 1000);
+    let timer: any = null;
+    if (call.status === 'connected') {
+      timer = setInterval(() => {
+        onUpdateCall(prev => ({
+          ...prev,
+          duration: prev.duration + 1,
+          packetsSent: prev.packetsSent + Math.floor(Math.random() * 5 + 48),
+          packetsReceived: prev.packetsReceived + Math.floor(Math.random() * 5 + 48),
+          latencyMs: Math.floor(10 + Math.random() * 5),
+        }));
+      }, 1000);
+    }
 
     return () => {
-      clearInterval(timer);
-      webRtcManager.cleanup();
+      if (timer) clearInterval(timer);
+      if (call.status === 'connected' || isEcho) {
+        webRtcManager.cleanup();
+      }
     };
-  }, [call.roomNumber, call.direction]);
+  }, [call.roomNumber, call.direction, call.status]);
 
   // Futuristic High-Resolution Audio Spectrum Visualizer
   useEffect(() => {
@@ -217,11 +225,13 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
         <div className="flex items-center justify-between border-b border-neutral-800/70 pb-3 sm:pb-4 shrink-0">
           <div className="flex items-center space-x-2">
             <span className="relative flex h-2 sm:h-2.5 w-2 sm:w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 sm:h-2.5 w-2 sm:w-2.5 bg-emerald-500"></span>
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${call.status === 'ringing' ? 'bg-amber-400' : 'bg-emerald-400'} opacity-75`}></span>
+              <span className={`relative inline-flex rounded-full h-2 sm:h-2.5 w-2 sm:w-2.5 ${call.status === 'ringing' ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
             </span>
-            <div className="text-[11px] sm:text-xs font-mono font-medium text-emerald-400 flex items-center space-x-1.5">
-              <span className="tracking-wider uppercase">TUNNEL ACTIVE</span>
+            <div className={`text-[11px] sm:text-xs font-mono font-medium ${call.status === 'ringing' ? 'text-amber-400' : 'text-emerald-400'} flex items-center space-x-1.5`}>
+              <span className="tracking-wider uppercase">
+                {call.status === 'ringing' ? 'RINGING PEER...' : 'TUNNEL ACTIVE'}
+              </span>
               <span className="text-neutral-700 hidden xs:inline">|</span>
               <span className="text-neutral-400 hidden xs:inline">AES-256</span>
             </div>
@@ -249,7 +259,7 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
         {/* Center: Remote Target & High-Tech HUD Waveform */}
         <div className="my-auto py-3 sm:py-4 text-center shrink-0">
           <div className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl sm:rounded-3xl bg-[#07090e] border border-neutral-800 text-emerald-400 mb-3 shadow-[inset_0_2px_10px_rgba(0,0,0,0.8)] relative">
-            <Radio className="w-7 h-7 sm:w-9 sm:h-9" />
+            <Radio className={`w-7 h-7 sm:w-9 sm:h-9 ${call.status === 'ringing' ? 'animate-pulse text-amber-400' : ''}`} />
             <span className="absolute -bottom-1 -right-1 px-1 sm:px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[8px] sm:text-[9px] font-mono">
               E2EE
             </span>
@@ -265,8 +275,10 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
           </div>
 
           <div className="inline-flex items-center space-x-2 px-3 py-1 bg-[#06080d] border border-neutral-800 rounded-full text-xs font-mono text-neutral-300 shadow-inner">
-            <Clock className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-            <span className="tabular-nums tracking-widest">{formatDuration(call.duration)}</span>
+            <Clock className={`w-3.5 h-3.5 ${call.status === 'ringing' ? 'text-amber-400 animate-bounce' : 'text-emerald-400 animate-pulse'}`} />
+            <span className="tabular-nums tracking-widest font-semibold">
+              {call.status === 'ringing' ? 'CALLING...' : formatDuration(call.duration)}
+            </span>
           </div>
 
           {/* Audio Visualizer Canvas */}
@@ -417,16 +429,16 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
             <MessageSquare className="w-5 h-5" />
           </button>
 
-          {/* End Call Button */}
+          {/* End / Cancel Call Button */}
           <button
             id="end-call-btn"
             type="button"
             onClick={onEndCall}
             className="p-3.5 sm:p-4 px-5 sm:px-6 rounded-xl sm:rounded-2xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 active:from-red-700 active:to-rose-700 text-white font-semibold font-mono tracking-wider shadow-[0_4px_25px_rgba(239,68,68,0.4)] transition-all cursor-pointer flex items-center space-x-2 min-h-[44px]"
-            title="End Encrypted Session"
+            title={call.status === 'ringing' ? 'Cancel Call' : 'End Encrypted Session'}
           >
             <PhoneOff className="w-5 h-5" />
-            <span className="text-xs uppercase">End</span>
+            <span className="text-xs uppercase">{call.status === 'ringing' ? 'Cancel' : 'End'}</span>
           </button>
         </div>
 

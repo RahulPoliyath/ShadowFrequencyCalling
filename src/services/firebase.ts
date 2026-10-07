@@ -634,7 +634,7 @@ export class FirebaseService {
 
           return null;
         })(),
-        1200,
+        5000,
         null
       );
     } catch {
@@ -669,6 +669,24 @@ export class FirebaseService {
           return sys;
         }
       }
+
+      // Check localStorage cached users directly (0ms)
+      try {
+        const rawUsers = localStorage.getItem('shadow_users_store');
+        if (rawUsers) {
+          const parsed = JSON.parse(rawUsers);
+          if (Array.isArray(parsed)) {
+            for (const u of parsed) {
+              if (u.assignedNumber === cleanPhone || (u.username && u.username.toLowerCase() === cleanAlias)) {
+                return u;
+              }
+              const uDigits = (u.assignedNumber || '').replace(/\D/g, '');
+              const u10 = uDigits.length >= 10 ? uDigits.slice(-10) : uDigits;
+              if (digits10.length === 10 && u10 === digits10) return u;
+            }
+          }
+        }
+      } catch {}
 
       return await withTimeout(
         (async () => {
@@ -748,7 +766,7 @@ export class FirebaseService {
 
           return null;
         })(),
-        1200,
+        5000,
         null
       );
     } catch {
@@ -903,29 +921,53 @@ export class FirebaseService {
     callerNumber: string;
     callerAlias: string;
     roomNumber: string;
-    type: 'call_offer' | 'call_decline' | 'call_accept';
+    targetUserId?: string;
+    targetUsername?: string;
+    type: 'call_offer' | 'call_decline' | 'call_accept' | 'call_end';
   }): Promise<string> {
     try {
       await ensureAuthReady();
-      const signalRef = await addDoc(collection(db, 'signals'), {
+      const targetDigits = (signal.targetNumber || '').replace(/\D/g, '');
+      const target10 = targetDigits.length >= 10 ? targetDigits.slice(-10) : targetDigits;
+      const callerDigits = (signal.callerNumber || '').replace(/\D/g, '');
+      const caller10 = callerDigits.length >= 10 ? callerDigits.slice(-10) : callerDigits;
+      const payload = {
         ...signal,
+        roomId: signal.roomNumber,
+        targetRoom: signal.roomNumber,
+        senderId: signal.callerNumber,
+        targetDigits,
+        target10,
+        callerDigits,
+        caller10,
+        targetUsername: signal.targetUsername ? signal.targetUsername.toLowerCase().replace(/^@/, '') : '',
+        targetUserId: signal.targetUserId || '',
+        signalKind: 'call_lifecycle',
         timestamp: Date.now(),
-      });
+      };
+      const signalRef = await addDoc(collection(db, 'signals'), payload);
       return signalRef.id;
-    } catch {
+    } catch (err) {
+      console.warn('dispatchCallSignal notice:', err);
       return '';
     }
   }
 
   /**
-   * Listens in real-time to incoming call signals targeted to this user's assigned virtual number.
-   * Matches both formatted string and raw digits.
+   * Listens in real-time to incoming call signals targeted to this user's assigned virtual number or username.
+   * Matches formatted string, raw digits, 10-digit suffix, and username alias.
    */
   static subscribeToIncomingCalls(
-    assignedNumber: string,
+    currentUser: { id?: string; username?: string; assignedNumber: string } | string,
     onIncoming: (call: { roomNumber: string; callerNumber: string; callerAlias: string; timestamp: number; signalId: string }) => void
   ): Unsubscribe {
+    const assignedNumber = typeof currentUser === 'string' ? currentUser : currentUser.assignedNumber;
+    const currentUsername = typeof currentUser === 'string' ? '' : (currentUser.username || '').toLowerCase().replace(/^@/, '');
+    const currentUserId = typeof currentUser === 'string' ? '' : (currentUser.id || '');
+
     const cleanDigits = assignedNumber.replace(/\D/g, '');
+    const clean10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+
     const q = query(
       collection(db, 'signals'),
       where('type', '==', 'call_offer')
@@ -937,17 +979,32 @@ export class FirebaseService {
         if (change.type === 'added') {
           const data = change.doc.data();
           const target = (data.targetNumber || '').trim();
-          const targetDigits = target.replace(/\D/g, '');
+          const targetDigits = (data.targetDigits || target.replace(/\D/g, ''));
+          const target10 = data.target10 || (targetDigits.length >= 10 ? targetDigits.slice(-10) : targetDigits);
+          const targetUsername = (data.targetUsername || '').toLowerCase().replace(/^@/, '');
+          const targetUserId = data.targetUserId || '';
 
-          // Check if signal matches user's number
-          const matches = target === assignedNumber ||
-            (targetDigits.length >= 7 && (cleanDigits === targetDigits || cleanDigits.endsWith(targetDigits) || targetDigits.endsWith(cleanDigits)));
+          // Do not ring user's own device from their own outbound call offer
+          const isOwnCall = 
+            (data.callerNumber && data.callerNumber === assignedNumber) ||
+            (cleanDigits && data.callerDigits && cleanDigits === data.callerDigits) ||
+            (currentUsername && data.callerAlias && data.callerAlias.toLowerCase() === `@${currentUsername}`);
+          if (isOwnCall) return;
+
+          // Check if signal matches user's number or username across all formatting variants
+          const matches = 
+            (targetUserId && currentUserId && targetUserId === currentUserId) ||
+            (targetUsername && currentUsername && targetUsername === currentUsername) ||
+            target === assignedNumber ||
+            (cleanDigits && targetDigits && cleanDigits === targetDigits) ||
+            (clean10.length === 10 && target10.length === 10 && clean10 === target10) ||
+            (targetDigits.length >= 7 && (cleanDigits.endsWith(targetDigits) || targetDigits.endsWith(cleanDigits)));
 
           if (matches) {
-            // Only trigger if signal was created recently (within last 60 seconds)
-            if (now - data.timestamp < 60000) {
+            // Trigger if signal was created recently (within last 90 seconds)
+            if (now - data.timestamp < 90000) {
               onIncoming({
-                roomNumber: data.roomNumber,
+                roomNumber: data.roomNumber || data.roomId,
                 callerNumber: data.callerNumber,
                 callerAlias: data.callerAlias,
                 timestamp: data.timestamp,
@@ -959,6 +1016,32 @@ export class FirebaseService {
       });
     }, (err) => {
       console.warn('Signal snapshot listener notice:', err);
+    });
+  }
+
+  /**
+   * Listens in real-time to call decline or hangup events for an active room.
+   */
+  static subscribeToCallStatus(
+    roomNumber: string,
+    onStatusChange: (status: 'call_decline' | 'call_accept' | 'call_end') => void
+  ): Unsubscribe {
+    const q = query(
+      collection(db, 'signals'),
+      where('roomId', '==', roomNumber)
+    );
+
+    return onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const data = change.doc.data();
+          if (data.type === 'call_decline' || data.type === 'call_accept' || data.type === 'call_end') {
+            onStatusChange(data.type);
+          }
+        }
+      });
+    }, (err) => {
+      console.warn('Call status listener notice:', err);
     });
   }
 

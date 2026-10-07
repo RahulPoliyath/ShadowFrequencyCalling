@@ -45,29 +45,20 @@ function enhanceOpusVoiceSdp(sdp: string): string {
   const fmtpRegex = new RegExp(`a=fmtp:${opusPayloadType}\\s+([^\\r\\n]+)`, 'i');
 
   const extraVoiceParams = [
-    'minptime=10',
-    'useinbandfec=1',
-    'usedtx=1',             // Discontinuous transmission: zero packets transmitted during silence (removes background hiss)
-    'stereo=0',             // Mono transmission: eliminates acoustic phase reflections
+    'useinbandfec=1',       // Forward Error Correction: robust voice packets over mobile networks
+    'stereo=0',             // Mono voice: prevents acoustic phase cancellation and echo
     'sprop-stereo=0',
-    'cbr=0',
-    'maxaveragebitrate=32000' // Wideband voice clarity
+    'maxaveragebitrate=48000', // HD Wideband voice clarity
+    'dtx=1'                 // Discontinuous Transmission: silence background packet noise
   ];
 
   if (fmtpRegex.test(sdp)) {
     return sdp.replace(fmtpRegex, (_match, existingParams: string) => {
       let params = existingParams;
-      if (!params.includes('usedtx=')) params += ';usedtx=1';
-      else params = params.replace(/usedtx=\d+/g, 'usedtx=1');
-
       if (!params.includes('useinbandfec=')) params += ';useinbandfec=1';
-      else params = params.replace(/useinbandfec=\d+/g, 'useinbandfec=1');
-
       if (!params.includes('stereo=')) params += ';stereo=0;sprop-stereo=0';
-      else params = params.replace(/stereo=\d+/g, 'stereo=0').replace(/sprop-stereo=\d+/g, 'sprop-stereo=0');
-
-      if (!params.includes('maxaveragebitrate=')) params += ';maxaveragebitrate=32000';
-
+      if (!params.includes('maxaveragebitrate=')) params += ';maxaveragebitrate=48000';
+      if (!params.includes('dtx=')) params += ';dtx=1';
       return `a=fmtp:${opusPayloadType} ${params}`;
     });
   } else {
@@ -80,34 +71,22 @@ function enhanceOpusVoiceSdp(sdp: string): string {
 export class WebRtcManager {
   private peerConnection: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
-  private processedStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
   private remoteAudioElement: HTMLAudioElement | null = null;
+  private remoteSourceNode: MediaStreamAudioSourceNode | null = null;
+  private remoteGainNode: GainNode | null = null;
+  private localSourceNode: MediaStreamAudioSourceNode | null = null;
 
-  // Real-time Web Audio DSP Voice Pipeline
+  // Real-time Web Audio Analyser
   private audioCtx: AudioContext | null = null;
-  private rawMicSource: MediaStreamAudioSourceNode | null = null;
-  private highpassFilter: BiquadFilterNode | null = null;
-  private presenceFilter: BiquadFilterNode | null = null;
-  private lowpassFilter: BiquadFilterNode | null = null;
-  private compressor: DynamicsCompressorNode | null = null;
-  private voiceGateGain: GainNode | null = null;
-  private micMasterGain: GainNode | null = null;
-  private dspDestination: MediaStreamAudioDestinationNode | null = null;
-
-  // Voice Activity Detection / Noise Gate Interval
-  private vadInterval: any = null;
-  private lastVoiceTime: number = 0;
+  private analyser: AnalyserNode | null = null;
+  private freqData: Uint8Array = new Uint8Array(32);
+  private zeroFreqData: Uint8Array = new Uint8Array(32);
 
   // Echo Loopback for Automated Node testing
   private echoSource: MediaStreamAudioSourceNode | null = null;
   private echoDelay: DelayNode | null = null;
   private echoGain: GainNode | null = null;
-
-  // Audio Analysis for Visualizer
-  private analyser: AnalyserNode | null = null;
-  private freqData: Uint8Array = new Uint8Array(32);
-  private zeroFreqData: Uint8Array = new Uint8Array(32);
 
   // Mute & State Flags
   private isMuted: boolean = false;
@@ -155,7 +134,7 @@ export class WebRtcManager {
   }
 
   /**
-   * Initializes full-duplex WebRTC audio connection with DSP Voice Isolation.
+   * Initializes full-duplex WebRTC audio connection.
    */
   async startCallSession(params: {
     roomId: string;
@@ -179,35 +158,44 @@ export class WebRtcManager {
       // 1. Acquire local microphone stream with high-fidelity hardware AEC & noise suppression
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         try {
-          const audioConstraints: any = {
-            echoCancellation: { ideal: true },
-            noiseSuppression: { ideal: true },
-            autoGainControl: { ideal: true },
-            googEchoCancellation: { ideal: true },
-            googAutoGainControl: { ideal: true },
-            googNoiseSuppression: { ideal: true },
-            googHighpassFilter: { ideal: true },
-            googTypingNoiseDetection: { ideal: true },
-            googAudioMirroring: { ideal: false },
-            channelCount: { ideal: 1 },
-            sampleRate: { ideal: 48000 },
-          };
-
           this.localStream = await navigator.mediaDevices.getUserMedia({
-            audio: audioConstraints,
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
             video: false,
           });
-        } catch (micErr) {
-          console.warn('Microphone hardware access restricted:', micErr);
+        } catch (constraintErr) {
+          try {
+            this.localStream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+              video: false,
+            });
+          } catch (micErr) {
+            console.warn('Microphone hardware access restricted:', micErr);
+          }
         }
       }
 
       const ctx = this.getAudioContext();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
 
       // 2. Setup AnalyserNode for spectrum visualization
       this.analyser = ctx.createAnalyser();
       this.analyser.fftSize = 64;
       this.analyser.smoothingTimeConstant = 0.8;
+
+      if (this.localStream && this.localStream.getAudioTracks().length > 0) {
+        try {
+          this.localSourceNode = ctx.createMediaStreamSource(this.localStream);
+          this.localSourceNode.connect(this.analyser);
+        } catch (e) {
+          console.warn('Visualizer analyser connection notice:', e);
+        }
+      }
 
       // 3. Automated Echo Loopback Mode (for @echo_node only)
       if (this.isEcho) {
@@ -222,7 +210,6 @@ export class WebRtcManager {
           this.echoSource.connect(this.echoDelay);
           this.echoDelay.connect(this.echoGain);
           this.echoGain.connect(ctx.destination);
-          this.echoSource.connect(this.analyser);
         }
 
         if (this.onRemoteTrackCallback) {
@@ -231,73 +218,17 @@ export class WebRtcManager {
         return true;
       }
 
-      // 4. Build Real-Time Web Audio DSP Voice Purification Pipeline
-      // Raw Mic -> Highpass (85Hz) -> Presence Peak (2.8kHz) -> Lowpass (7.8kHz) -> Dynamics Compressor -> Voice Gate -> Mic Master Gain -> Stream Destination
-      if (this.localStream && this.localStream.getAudioTracks().length > 0) {
-        this.rawMicSource = ctx.createMediaStreamSource(this.localStream);
-
-        // Highpass Filter (85Hz): Strips HVAC rumble, desk thumps, fan vibrations, AC hum
-        this.highpassFilter = ctx.createBiquadFilter();
-        this.highpassFilter.type = 'highpass';
-        this.highpassFilter.frequency.setValueAtTime(85, ctx.currentTime);
-        this.highpassFilter.Q.setValueAtTime(0.7, ctx.currentTime);
-
-        // Peaking Presence Filter (2800Hz): Maximizes vocal clarity and articulation
-        this.presenceFilter = ctx.createBiquadFilter();
-        this.presenceFilter.type = 'peaking';
-        this.presenceFilter.frequency.setValueAtTime(2800, ctx.currentTime);
-        this.presenceFilter.gain.setValueAtTime(2.5, ctx.currentTime); // +2.5dB vocal presence
-        this.presenceFilter.Q.setValueAtTime(1.0, ctx.currentTime);
-
-        // Lowpass Filter (7800Hz): Cuts out electrical whine, high-frequency hiss
-        this.lowpassFilter = ctx.createBiquadFilter();
-        this.lowpassFilter.type = 'lowpass';
-        this.lowpassFilter.frequency.setValueAtTime(7800, ctx.currentTime);
-        this.lowpassFilter.Q.setValueAtTime(0.7, ctx.currentTime);
-
-        // Dynamics Compressor: Prevents speech distortion spikes and lifts whisper clarity
-        this.compressor = ctx.createDynamicsCompressor();
-        this.compressor.threshold.setValueAtTime(-36, ctx.currentTime);
-        this.compressor.knee.setValueAtTime(12, ctx.currentTime);
-        this.compressor.ratio.setValueAtTime(3.5, ctx.currentTime);
-        this.compressor.attack.setValueAtTime(0.003, ctx.currentTime);
-        this.compressor.release.setValueAtTime(0.15, ctx.currentTime);
-
-        // Dynamic Voice Activity Gate: Attenuates background silence to prevent acoustic loopback
-        this.voiceGateGain = ctx.createGain();
-        this.voiceGateGain.gain.setValueAtTime(1.0, ctx.currentTime);
-
-        // Master Mic Gain: For instantaneous hardware-clean muting
-        this.micMasterGain = ctx.createGain();
-        this.micMasterGain.gain.setValueAtTime(1.0, ctx.currentTime);
-
-        // Destination for WebRTC Peer Transmission
-        this.dspDestination = ctx.createMediaStreamDestination();
-
-        // Connect DSP chain
-        this.rawMicSource.connect(this.highpassFilter);
-        this.highpassFilter.connect(this.presenceFilter);
-        this.presenceFilter.connect(this.lowpassFilter);
-        this.lowpassFilter.connect(this.compressor);
-        this.compressor.connect(this.voiceGateGain);
-        this.voiceGateGain.connect(this.micMasterGain);
-        this.micMasterGain.connect(this.dspDestination);
-        this.micMasterGain.connect(this.analyser); // Connect to visualizer without feeding to speakers
-
-        this.processedStream = this.dspDestination.stream;
-
-        // Start Voice Activity Detection (VAD) / Noise Gate Loop
-        this.startVoiceActivityDetector();
-      }
-
-      // 5. Peer-to-Peer WebRTC Mode (between registered subscribers)
+      // 4. Peer-to-Peer WebRTC Mode
       this.peerConnection = new RTCPeerConnection(ICE_SERVERS);
 
-      // Add processed stream tracks (or raw fallback) to peer connection
-      const streamToSend = this.processedStream || this.localStream;
-      if (streamToSend) {
-        streamToSend.getAudioTracks().forEach((track) => {
-          this.peerConnection?.addTrack(track, streamToSend);
+      // Add clean hardware microphone tracks directly to peer connection
+      if (this.localStream) {
+        this.localStream.getAudioTracks().forEach((track) => {
+          track.enabled = !this.isMuted;
+          if ('contentHint' in track) {
+            (track as any).contentHint = 'speech';
+          }
+          this.peerConnection?.addTrack(track, this.localStream!);
         });
       }
 
@@ -305,18 +236,41 @@ export class WebRtcManager {
       this.peerConnection.ontrack = (event) => {
         if (event.streams && event.streams[0]) {
           this.remoteStream = event.streams[0];
+          
+          // Route 1: Dedicated HTML5 Audio Element with playsinline (hardware AEC, avoids audio doubling)
           if (this.remoteAudioElement) {
             this.remoteAudioElement.srcObject = this.remoteStream;
             this.remoteAudioElement.muted = !this.isSpeakerEnabled;
-            this.remoteAudioElement.play().catch(() => {
-              const unlock = () => {
-                this.remoteAudioElement?.play().catch(() => {});
-                document.removeEventListener('click', unlock);
-                document.removeEventListener('touchend', unlock);
-              };
-              document.addEventListener('click', unlock, { once: true });
-              document.addEventListener('touchend', unlock, { once: true });
-            });
+            this.remoteAudioElement.volume = 1.0;
+            const playPromise = this.remoteAudioElement.play();
+            if (playPromise !== undefined) {
+              playPromise.catch(() => {
+                const unlock = () => {
+                  this.remoteAudioElement?.play().catch(() => {});
+                  document.removeEventListener('click', unlock);
+                  document.removeEventListener('touchend', unlock);
+                };
+                document.addEventListener('click', unlock, { once: true });
+                document.addEventListener('touchend', unlock, { once: true });
+              });
+            }
+          }
+
+          // Route 2: Feed Web Audio Analyser for spectrum visualization ONLY
+          // (NEVER connect to ctx.destination, as that creates double-playback, metallic echo, and feedback)
+          try {
+            if (ctx.state === 'suspended') {
+              ctx.resume().catch(() => {});
+            }
+            if (this.remoteSourceNode) {
+              try { this.remoteSourceNode.disconnect(); } catch {}
+            }
+            this.remoteSourceNode = ctx.createMediaStreamSource(this.remoteStream);
+            if (this.analyser) {
+              this.remoteSourceNode.connect(this.analyser);
+            }
+          } catch (e) {
+            console.warn('Audio visualizer analyser connection notice:', e);
           }
 
           if (this.onRemoteTrackCallback) {
@@ -325,13 +279,12 @@ export class WebRtcManager {
         }
       };
 
-      // Handle ICE Candidates with Anti-Metadata / Local IP Leak Protection
+      // Handle ICE Candidates
       this.peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
           if (event.candidate.candidate) {
             const sanitized = sanitizeIceCandidate(event.candidate.candidate);
             if (!sanitized) {
-              // Strip private LAN IP / host leakage
               return;
             }
           }
@@ -353,16 +306,15 @@ export class WebRtcManager {
         }
       };
 
-      // 6. Start listening to remote WebRTC signaling
+      // 5. Start listening to remote WebRTC signaling
       this.subscribeSignaling();
 
-      // 7. If caller (initiator), create and broadcast enhanced WebRTC Offer
+      // 6. If caller (initiator), create and broadcast WebRTC Offer
       if (this.isInitiator) {
         const rawOffer = await this.peerConnection.createOffer({
           offerToReceiveAudio: true,
         });
 
-        // Munge SDP to enforce Opus DTX, FEC, and mono anti-echo transmission
         const cleanSdp = enhanceOpusVoiceSdp(rawOffer.sdp || '');
         const cleanOffer = new RTCSessionDescription({ type: 'offer', sdp: cleanSdp });
         await this.peerConnection.setLocalDescription(cleanOffer);
@@ -392,44 +344,6 @@ export class WebRtcManager {
   }
 
   /**
-   * Adaptive Voice Activity Detector (VAD) and Noise Gate:
-   * Smoothly attenuates mic gain by -36dB when user is silent,
-   * completely eliminating background noise and preventing speaker echo.
-   */
-  private startVoiceActivityDetector(): void {
-    if (this.vadInterval) clearInterval(this.vadInterval);
-    this.lastVoiceTime = Date.now();
-
-    const sampleBuffer = new Uint8Array(32);
-
-    this.vadInterval = setInterval(() => {
-      if (!this.analyser || !this.voiceGateGain || !this.audioCtx || this.isMuted) return;
-
-      this.analyser.getByteFrequencyData(sampleBuffer);
-      let sum = 0;
-      for (let i = 0; i < sampleBuffer.length; i++) {
-        sum += sampleBuffer[i];
-      }
-      const avg = sum / sampleBuffer.length;
-
-      const now = Date.now();
-      const ctx = this.audioCtx;
-
-      // Threshold: speech energy above ambient noise floor
-      if (avg > 18) {
-        this.lastVoiceTime = now;
-        // Instant voice open (4ms)
-        this.voiceGateGain.gain.setTargetAtTime(1.0, ctx.currentTime, 0.005);
-      } else {
-        // Hold open for 160ms so word endings aren't clipped, then smoothly attenuate
-        if (now - this.lastVoiceTime > 160) {
-          this.voiceGateGain.gain.setTargetAtTime(0.02, ctx.currentTime, 0.05); // -34dB reduction during silence
-        }
-      }
-    }, 30);
-  }
-
-  /**
    * Dispatches WebRTC SDP / ICE signals via Firestore and local BroadcastChannel.
    */
   private async dispatchSignal(signal: WebRtcSignalPayload): Promise<void> {
@@ -442,6 +356,7 @@ export class WebRtcManager {
       await addDoc(collection(db, 'signals'), {
         ...signal,
         targetRoom: this.roomId,
+        signalKind: 'webrtc',
       });
     } catch (e) {
       console.warn('WebRTC dispatch notice:', e);
@@ -472,10 +387,18 @@ export class WebRtcManager {
       this.unsubscribeFirestore = onSnapshot(q, (snapshot) => {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'added') {
-            const data = change.doc.data() as WebRtcSignalPayload;
+            const data = change.doc.data() as any;
+            // CRITICAL FIX: ONLY process WebRTC packets (webrtc_offer, webrtc_answer, webrtc_ice, webrtc_ready)
+            // NEVER touch or delete call invitation signals (call_offer, call_accept, call_decline, call_end)!
+            if (!data.type || !String(data.type).startsWith('webrtc_')) {
+              return;
+            }
             if (data.senderId !== this.peerId) {
-              this.handleIncomingSignal(data);
-              deleteDoc(change.doc.ref).catch(() => {});
+              this.handleIncomingSignal(data as WebRtcSignalPayload);
+              // Clean up processed WebRTC packet after safe buffer delay to avoid peer race conditions
+              setTimeout(() => {
+                deleteDoc(change.doc.ref).catch(() => {});
+              }, 2500);
             }
           }
         });
@@ -525,19 +448,16 @@ export class WebRtcManager {
         } else {
           this.iceCandidatesQueue.push(signal.candidate);
         }
-      } else if (signal.type === 'webrtc_ready' && this.isInitiator && this.peerConnection.signalingState === 'stable') {
-        const rawOffer = await this.peerConnection.createOffer({ offerToReceiveAudio: true });
-        const cleanOfferSdp = enhanceOpusVoiceSdp(rawOffer.sdp || '');
-        await this.peerConnection.setLocalDescription(
-          new RTCSessionDescription({ type: 'offer', sdp: cleanOfferSdp })
-        );
-        await this.dispatchSignal({
-          roomId: this.roomId,
-          senderId: this.peerId,
-          type: 'webrtc_offer',
-          sdp: cleanOfferSdp,
-          timestamp: Date.now(),
-        });
+      } else if (signal.type === 'webrtc_ready' && this.isInitiator) {
+        if (this.peerConnection.localDescription) {
+          await this.dispatchSignal({
+            roomId: this.roomId,
+            senderId: this.peerId,
+            type: 'webrtc_offer',
+            sdp: this.peerConnection.localDescription.sdp,
+            timestamp: Date.now(),
+          });
+        }
       }
     } catch (e) {
       console.warn('WebRTC signal process notice:', e);
@@ -557,32 +477,17 @@ export class WebRtcManager {
   }
 
   /**
-   * Toggles microphone mute across all hardware tracks, Web Audio gain nodes,
-   * and WebRTC peer connection senders.
+   * Toggles microphone mute across hardware tracks and senders.
    */
   setMicrophoneMuted(isMuted: boolean): void {
     this.isMuted = isMuted;
 
-    // 1. Web Audio Master Gain attenuation
-    if (this.micMasterGain && this.audioCtx) {
-      this.micMasterGain.gain.setValueAtTime(isMuted ? 0 : 1.0, this.audioCtx.currentTime);
-    }
-
-    // 2. Hardware microphone tracks
     if (this.localStream) {
       this.localStream.getAudioTracks().forEach((track) => {
         track.enabled = !isMuted;
       });
     }
 
-    // 3. DSP Processed output tracks
-    if (this.processedStream) {
-      this.processedStream.getAudioTracks().forEach((track) => {
-        track.enabled = !isMuted;
-      });
-    }
-
-    // 4. WebRTC Peer Connection Senders
     if (this.peerConnection) {
       this.peerConnection.getSenders().forEach((sender) => {
         if (sender.track && sender.track.kind === 'audio') {
@@ -591,7 +496,6 @@ export class WebRtcManager {
       });
     }
 
-    // 5. Echo Loopback Node (if active)
     if (this.echoSource && this.echoGain) {
       this.echoGain.gain.value = isMuted ? 0 : 0.7;
     }
@@ -605,6 +509,9 @@ export class WebRtcManager {
     if (this.remoteAudioElement) {
       this.remoteAudioElement.muted = !isEnabled;
     }
+    if (this.remoteGainNode) {
+      this.remoteGainNode.gain.value = isEnabled ? 1.0 : 0.0;
+    }
     if (this.echoGain) {
       this.echoGain.gain.value = isEnabled ? 0.7 : 0;
     }
@@ -612,7 +519,6 @@ export class WebRtcManager {
 
   /**
    * Retrieves real-time audio frequencies for the visualizer.
-   * Returns flatline zero data if muted.
    */
   getAudioFrequencies(): Uint8Array {
     if (this.isMuted) {
@@ -632,14 +538,9 @@ export class WebRtcManager {
   }
 
   /**
-   * Shuts down WebRTC connections, DSP pipelines, audio hardware, and listeners.
+   * Shuts down WebRTC connections, audio hardware, and listeners.
    */
   cleanup(): void {
-    if (this.vadInterval) {
-      clearInterval(this.vadInterval);
-      this.vadInterval = null;
-    }
-
     if (this.unsubscribeFirestore) {
       this.unsubscribeFirestore();
       this.unsubscribeFirestore = null;
@@ -654,53 +555,29 @@ export class WebRtcManager {
       this.localStream = null;
     }
 
-    if (this.processedStream) {
-      this.processedStream.getTracks().forEach((t) => t.stop());
-      this.processedStream = null;
-    }
-
     if (this.remoteAudioElement) {
       this.remoteAudioElement.srcObject = null;
       this.remoteAudioElement.pause();
     }
 
+    if (this.remoteSourceNode) {
+      try { this.remoteSourceNode.disconnect(); } catch {}
+      this.remoteSourceNode = null;
+    }
+
+    if (this.remoteGainNode) {
+      try { this.remoteGainNode.disconnect(); } catch {}
+      this.remoteGainNode = null;
+    }
+
+    if (this.localSourceNode) {
+      try { this.localSourceNode.disconnect(); } catch {}
+      this.localSourceNode = null;
+    }
+
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
-    }
-
-    // Clean up Web Audio DSP nodes
-    if (this.rawMicSource) {
-      try { this.rawMicSource.disconnect(); } catch {}
-      this.rawMicSource = null;
-    }
-    if (this.highpassFilter) {
-      try { this.highpassFilter.disconnect(); } catch {}
-      this.highpassFilter = null;
-    }
-    if (this.presenceFilter) {
-      try { this.presenceFilter.disconnect(); } catch {}
-      this.presenceFilter = null;
-    }
-    if (this.lowpassFilter) {
-      try { this.lowpassFilter.disconnect(); } catch {}
-      this.lowpassFilter = null;
-    }
-    if (this.compressor) {
-      try { this.compressor.disconnect(); } catch {}
-      this.compressor = null;
-    }
-    if (this.voiceGateGain) {
-      try { this.voiceGateGain.disconnect(); } catch {}
-      this.voiceGateGain = null;
-    }
-    if (this.micMasterGain) {
-      try { this.micMasterGain.disconnect(); } catch {}
-      this.micMasterGain = null;
-    }
-    if (this.dspDestination) {
-      try { this.dspDestination.disconnect(); } catch {}
-      this.dspDestination = null;
     }
 
     if (this.echoSource) {

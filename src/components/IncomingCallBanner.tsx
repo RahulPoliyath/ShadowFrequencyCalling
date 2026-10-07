@@ -6,6 +6,8 @@
 import React, { useEffect } from 'react';
 import { Phone, PhoneOff, Shield, Radio, CornerDownLeft } from 'lucide-react';
 import { soundEngine } from '../services/audio';
+import { FirebaseService } from '../services/firebase';
+import { StorageService } from '../services/storage';
 
 interface IncomingCallBannerProps {
   incomingCall: {
@@ -25,10 +27,27 @@ export const IncomingCallBanner: React.FC<IncomingCallBannerProps> = ({
 }) => {
   useEffect(() => {
     soundEngine.startRinging(true);
+
+    // Auto-dismiss if caller cancels while ringing
+    const unsubCloud = FirebaseService.subscribeToCallStatus(incomingCall.roomNumber, (status) => {
+      if (status === 'call_decline' || status === 'call_end') {
+        onDecline();
+      }
+    });
+    const unsubBroadcast = StorageService.subscribeSync((data) => {
+      if (data.action === 'CALL_STATUS' && data.payload?.roomNumber === incomingCall.roomNumber) {
+        if (data.payload.status === 'call_decline' || data.payload.status === 'call_end') {
+          onDecline();
+        }
+      }
+    });
+
     return () => {
       soundEngine.stopRinging();
+      unsubCloud();
+      unsubBroadcast();
     };
-  }, []);
+  }, [incomingCall.roomNumber]);
 
   return (
     <div 

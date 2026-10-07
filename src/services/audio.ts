@@ -118,14 +118,25 @@ class SoundEngine {
     this.stopRinging();
     try {
       const ctx = this.getContext();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
       const ring = () => {
         if (!this.ctx) return;
-        const now = ctx.currentTime;
-        const osc1 = ctx.createOscillator();
-        const osc2 = ctx.createOscillator();
-        const gain = ctx.createGain();
+        if (this.ctx.state === 'suspended') {
+          this.ctx.resume().catch(() => {});
+        }
+        this.stopCurrentRingNodes();
 
-        // Standard ring tone pair: 440Hz + 480Hz
+        const now = this.ctx.currentTime;
+        const osc1 = this.ctx.createOscillator();
+        const osc2 = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        this.ringOsc1 = osc1;
+        this.ringOsc2 = osc2;
+        this.ringGain = gain;
+
+        // Standard ring tone pair: 440Hz + 480Hz (outgoing) or 520Hz + 660Hz (incoming)
         osc1.frequency.value = isIncoming ? 520 : 440;
         osc2.frequency.value = isIncoming ? 660 : 480;
 
@@ -133,13 +144,13 @@ class SoundEngine {
         osc2.type = 'sine';
 
         gain.gain.setValueAtTime(0, now);
-        gain.gain.linearRampToValueAtTime(0.08, now + 0.1);
-        gain.gain.setValueAtTime(0.08, now + 1.2);
+        gain.gain.linearRampToValueAtTime(0.12, now + 0.08);
+        gain.gain.setValueAtTime(0.12, now + 1.2);
         gain.gain.linearRampToValueAtTime(0.001, now + 1.4);
 
         osc1.connect(gain);
         osc2.connect(gain);
-        gain.connect(ctx.destination);
+        gain.connect(this.ctx.destination);
 
         osc1.start(now);
         osc2.start(now);
@@ -148,9 +159,33 @@ class SoundEngine {
       };
 
       ring();
-      this.ringInterval = setInterval(ring, 3200);
+      this.ringInterval = setInterval(ring, 2800);
     } catch {
       // Audio context might be restricted
+    }
+  }
+
+  private stopCurrentRingNodes(): void {
+    if (this.ringGain && this.ctx) {
+      try {
+        this.ringGain.gain.setValueAtTime(0, this.ctx.currentTime);
+        this.ringGain.disconnect();
+      } catch {}
+      this.ringGain = null;
+    }
+    if (this.ringOsc1) {
+      try {
+        this.ringOsc1.stop();
+        this.ringOsc1.disconnect();
+      } catch {}
+      this.ringOsc1 = null;
+    }
+    if (this.ringOsc2) {
+      try {
+        this.ringOsc2.stop();
+        this.ringOsc2.disconnect();
+      } catch {}
+      this.ringOsc2 = null;
     }
   }
 
@@ -159,11 +194,7 @@ class SoundEngine {
       clearInterval(this.ringInterval);
       this.ringInterval = null;
     }
-    if (this.ringGain && this.ctx) {
-      try {
-        this.ringGain.gain.setValueAtTime(0, this.ctx.currentTime);
-      } catch {}
-    }
+    this.stopCurrentRingNodes();
   }
 
   /**

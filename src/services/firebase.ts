@@ -192,7 +192,7 @@ export const SYSTEM_REGISTERED_USERS: User[] = [
       hardwareNoiseSuppression: true,
       antiMetadata: true,
       quickLockPinEnabled: false,
-      quickLockPin: '1234'
+      quickLockPin: ''
     }
   },
   {
@@ -221,7 +221,7 @@ export const SYSTEM_REGISTERED_USERS: User[] = [
       hardwareNoiseSuppression: true,
       antiMetadata: true,
       quickLockPinEnabled: false,
-      quickLockPin: '1234'
+      quickLockPin: ''
     }
   }
 ];
@@ -327,6 +327,24 @@ export class FirebaseService {
       await this.syncUserToCloud(user);
     } catch (e) {
       console.warn('Update user credentials error:', e);
+    }
+  }
+
+  /**
+   * Subscribes to real-time user document changes in Firestore for cross-device synchronization.
+   */
+  static subscribeToUser(userId: string, callback: (user: Partial<User>) => void): Unsubscribe {
+    try {
+      const userRef = doc(db, 'users', userId);
+      return onSnapshot(userRef, (snapshot) => {
+        if (snapshot.exists()) {
+          callback(snapshot.data() as Partial<User>);
+        }
+      }, (err) => {
+        console.warn('User cloud subscription notice:', err);
+      });
+    } catch {
+      return () => {};
     }
   }
 
@@ -611,7 +629,7 @@ export class FirebaseService {
                   hardwareNoiseSuppression: true,
                   antiMetadata: true,
                   quickLockPinEnabled: false,
-                  quickLockPin: '1234'
+                  quickLockPin: ''
                 }
               };
             }
@@ -728,7 +746,7 @@ export class FirebaseService {
                       hardwareNoiseSuppression: true,
                       antiMetadata: true,
                       quickLockPinEnabled: false,
-                      quickLockPin: '1234'
+                      quickLockPin: ''
                     },
                     passwordHash: '',
                     salt: ''

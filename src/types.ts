@@ -24,6 +24,7 @@ export interface PrivacySettings {
   antiMetadata: boolean;
   quickLockPinEnabled: boolean;
   quickLockPin: string;
+  quickLockPinUpdatedAt?: number;
   soundEffectsEnabled?: boolean;
   opusDtxEnabled?: boolean;
 }

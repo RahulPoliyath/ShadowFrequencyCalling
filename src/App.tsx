@@ -110,6 +110,28 @@ export default function App() {
       } else if (data.action === 'AUTH_STATE_CHANGED') {
         const u = StorageService.getCurrentUser();
         setCurrentUser(u);
+      } else if (data.action === 'USER_UPDATED') {
+        const updated = data.payload as User;
+        if (updated) {
+          const current = StorageService.getCurrentUser();
+          if (current && current.id === updated.id) {
+            setCurrentUser(updated);
+          }
+        }
+      } else if (data.action === 'PIN_UPDATED') {
+        setCurrentUser(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            privacySettings: {
+              ...prev.privacySettings,
+              quickLockPin: data.payload.pin,
+              quickLockPinEnabled: data.payload.enabled,
+              quickLockPinUpdatedAt: data.payload.updatedAt,
+            }
+          };
+        });
+        triggerInAppNotification('Terminal Armed Lock PIN synchronized');
       }
     });
 
@@ -134,6 +156,25 @@ export default function App() {
       setCallRecords(records);
     });
 
+    // Real-time user profile and PIN sync from Cloud Firestore
+    const unsubUser = FirebaseService.subscribeToUser(currentUser.id, (cloudUser) => {
+      if (cloudUser && cloudUser.privacySettings) {
+        setCurrentUser(prev => {
+          if (!prev) return null;
+          const merged: User = {
+            ...prev,
+            ...cloudUser,
+            privacySettings: {
+              ...prev.privacySettings,
+              ...cloudUser.privacySettings,
+            }
+          };
+          StorageService.saveUser(merged);
+          return merged;
+        });
+      }
+    });
+
     // Real-time incoming call alerts from remote devices worldwide
     const unsubSignals = FirebaseService.subscribeToIncomingCalls(
       { id: currentUser.id, username: currentUser.username, assignedNumber: currentUser.assignedNumber },
@@ -146,6 +187,7 @@ export default function App() {
 
     return () => {
       unsubRecords();
+      unsubUser();
       unsubSignals();
     };
   }, [currentUser?.id, currentUser?.assignedNumber, currentUser?.username]);
@@ -630,7 +672,11 @@ export default function App() {
       {/* Quick Lock Overlay */}
       {isQuickLocked && (
         <QuickLockOverlay
-          correctPin={currentUser.privacySettings.quickLockPin || '1234'}
+          correctPin={
+            currentUser.privacySettings.quickLockPin && currentUser.privacySettings.quickLockPin !== '1234'
+              ? currentUser.privacySettings.quickLockPin
+              : ''
+          }
           onUnlock={() => setIsQuickLocked(false)}
         />
       )}
@@ -780,9 +826,25 @@ export default function App() {
             <button
               id="quick-lock-btn"
               type="button"
-              onClick={() => setIsQuickLocked(true)}
+              onClick={() => {
+                const hasValidPin = Boolean(
+                  currentUser.privacySettings.quickLockPin &&
+                  currentUser.privacySettings.quickLockPin.length >= 4 &&
+                  currentUser.privacySettings.quickLockPin !== '1234'
+                );
+                if (!currentUser.privacySettings.quickLockPinEnabled || !hasValidPin) {
+                  triggerInAppNotification('Terminal Armed Lock is OFF. Configure your custom PIN in Settings.');
+                  setActiveTab('settings');
+                } else {
+                  setIsQuickLocked(true);
+                }
+              }}
               className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/80 rounded-xl transition-colors cursor-pointer min-h-[34px] min-w-[34px] flex items-center justify-center"
-              title="Lock Console (PIN Protected)"
+              title={
+                currentUser.privacySettings.quickLockPinEnabled && currentUser.privacySettings.quickLockPin
+                  ? "Lock Console (PIN Protected)"
+                  : "Terminal Lock (Off by default - Configure in Settings)"
+              }
             >
               <Lock className="w-4 h-4" />
             </button>

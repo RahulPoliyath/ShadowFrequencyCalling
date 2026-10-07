@@ -50,7 +50,23 @@ export class StorageService {
   static getUsers(): User[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.USERS);
-      return data ? JSON.parse(data) : [];
+      if (!data) return [];
+      const users: User[] = JSON.parse(data);
+      // Sanitize legacy default pin '1234' - must be off by default with no default PIN
+      let modified = false;
+      users.forEach(u => {
+        if (u.privacySettings) {
+          if (u.privacySettings.quickLockPin === '1234') {
+            u.privacySettings.quickLockPin = '';
+            u.privacySettings.quickLockPinEnabled = false;
+            modified = true;
+          }
+        }
+      });
+      if (modified) {
+        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+      }
+      return users;
     } catch {
       return [];
     }

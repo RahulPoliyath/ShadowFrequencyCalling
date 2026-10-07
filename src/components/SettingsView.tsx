@@ -37,6 +37,8 @@ function formatCustomPhoneNumber(areaCode: string, digitsRaw: string): string {
   return digitsRaw;
 }
 
+export const PIN_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours cooldown limit between PIN edits
+
 export const CUSTOM_NUMBER_PLANS: CustomNumberPlan[] = [
   {
     id: '7days',
@@ -93,7 +95,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [activeSection, setActiveSection] = useState<'all' | 'terminal_lock' | 'auto_shred' | 'account' | 'privacy' | 'keys'>('all');
 
   // --- Terminal Armed Lock State ---
-  const [pinEnabled, setPinEnabled] = useState(user.privacySettings.quickLockPinEnabled ?? true);
+  const existingSavedPin = (user.privacySettings.quickLockPin || '').trim();
+  const hasValidCustomPin = existingSavedPin.length >= 4 && existingSavedPin !== '1234';
+  const [pinEnabled, setPinEnabled] = useState(
+    Boolean(user.privacySettings.quickLockPinEnabled && hasValidCustomPin)
+  );
   const [currentPinInput, setCurrentPinInput] = useState('');
   const [newPinInput, setNewPinInput] = useState('');
   const [confirmPinInput, setConfirmPinInput] = useState('');
@@ -166,16 +172,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   // --- 1. Terminal Armed Lock Handlers ---
   const handleTogglePinEnabled = () => {
     const nextVal = !pinEnabled;
-    setPinEnabled(nextVal);
-    updateSettingField('quickLockPinEnabled', nextVal);
-    setPinMessage({
-      text: nextVal ? 'Terminal Armed Lock activated.' : 'Terminal Armed Lock disarmed.',
-      type: 'success',
-    });
-    setTimeout(() => setPinMessage(null), 3500);
+    const currentRaw = (user.privacySettings.quickLockPin || '').trim();
+    const hasPin = currentRaw.length >= 4 && currentRaw !== '1234';
+
+    if (nextVal) {
+      // Turning ON: If no custom PIN configured yet, open customization form
+      if (!hasPin) {
+        setShowPinInput(true);
+        setPinMessage({
+          text: 'Terminal Armed Lock is turned ON. Please customize and save your 4-8 digit PIN below.',
+          type: 'success',
+        });
+        return;
+      }
+      setPinEnabled(true);
+      updateSettingField('quickLockPinEnabled', true);
+      setPinMessage({
+        text: 'Terminal Armed Lock armed with your custom PIN.',
+        type: 'success',
+      });
+      setTimeout(() => setPinMessage(null), 3500);
+    } else {
+      // Turning OFF:
+      setPinEnabled(false);
+      updateSettingField('quickLockPinEnabled', false);
+      setPinMessage({
+        text: 'Terminal Armed Lock is now disarmed (OFF).',
+        type: 'success',
+      });
+      setTimeout(() => setPinMessage(null), 3500);
+    }
   };
 
-  const handleSavePin = () => {
+  const handleSavePin = async () => {
     setPinMessage(null);
     const cleaned = newPinInput.trim();
     if (!/^\d{4,8}$/.test(cleaned)) {
@@ -187,27 +216,80 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return;
     }
 
-    const existingPin = user.privacySettings.quickLockPin || '1234';
-    if (user.privacySettings.quickLockPin && currentPinInput.trim() !== existingPin) {
-      setPinMessage({ text: 'Current PIN is incorrect.', type: 'error' });
+    const currentSavedPin = (user.privacySettings.quickLockPin || '').trim();
+    const hasExistingCustomPin = currentSavedPin.length >= 4 && currentSavedPin !== '1234';
+    const lastPinUpdatedAt = user.privacySettings.quickLockPinUpdatedAt || 0;
+    const now = Date.now();
+    const timeSinceLastPinUpdate = now - lastPinUpdatedAt;
+
+    // 24-Hour Edit Limit Enforcement:
+    // If a custom PIN already exists and was updated less than 24 hours ago, block edit:
+    if (hasExistingCustomPin && lastPinUpdatedAt > 0 && timeSinceLastPinUpdate < PIN_COOLDOWN_MS) {
+      const remainingMs = PIN_COOLDOWN_MS - timeSinceLastPinUpdate;
+      const hoursLeft = Math.floor(remainingMs / (1000 * 60 * 60));
+      const minsLeft = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+      setPinMessage({
+        text: `PIN Edit Rate Limit: You can only edit your Terminal Armed Lock PIN once every 24 hours. Cooldown active for another ${hoursLeft}h ${minsLeft}m.`,
+        type: 'error',
+      });
       return;
     }
 
+    // If changing an existing custom PIN, verify current PIN for authentication
+    if (hasExistingCustomPin) {
+      if (!currentPinInput.trim()) {
+        setPinMessage({ text: 'Please enter your current PIN to authorize this change.', type: 'error' });
+        return;
+      }
+      if (currentPinInput.trim() !== currentSavedPin) {
+        setPinMessage({ text: 'Current PIN is incorrect.', type: 'error' });
+        return;
+      }
+      if (cleaned === currentSavedPin) {
+        setPinMessage({ text: 'New PIN must be different from your existing PIN.', type: 'error' });
+        return;
+      }
+    }
+
+    const timestampNow = Date.now();
     const updatedSettings: PrivacySettings = {
       ...user.privacySettings,
       quickLockPin: cleaned,
       quickLockPinEnabled: true,
+      quickLockPinUpdatedAt: timestampNow,
     };
     const updatedUser: User = {
       ...user,
       privacySettings: updatedSettings,
     };
+
     setPinEnabled(true);
+
+    // 1. Persist to local enclave
     StorageService.saveUser(updatedUser);
-    FirebaseService.syncUserToCloud(updatedUser).catch(() => {});
+
+    // 2. Broadcast across all active tabs & windows
+    StorageService.broadcastSync('USER_UPDATED', updatedUser);
+    StorageService.broadcastSync('PIN_UPDATED', {
+      pin: cleaned,
+      enabled: true,
+      updatedAt: timestampNow,
+    });
+
+    // 3. Immediately synchronize to Cloud Firestore
+    try {
+      await FirebaseService.syncUserToCloud(updatedUser);
+    } catch (e) {
+      console.warn('PIN cloud sync notice:', e);
+    }
+
+    // 4. Update application state
     onUpdateUser(updatedUser);
 
-    setPinMessage({ text: `Terminal PIN successfully set to ${cleaned.length} digits.`, type: 'success' });
+    setPinMessage({
+      text: `Terminal PIN successfully updated to ${cleaned.length} digits and synchronized across all nodes. Next PIN update will be available in 24 hours.`,
+      type: 'success',
+    });
     setNewPinInput('');
     setConfirmPinInput('');
     setCurrentPinInput('');
@@ -215,25 +297,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       soundEngine.playChime('verified');
     } catch {}
-    setTimeout(() => setPinMessage(null), 4000);
-  };
-
-  const handleResetPinDefault = () => {
-    const updatedSettings: PrivacySettings = {
-      ...user.privacySettings,
-      quickLockPin: '1234',
-      quickLockPinEnabled: true,
-    };
-    const updatedUser: User = {
-      ...user,
-      privacySettings: updatedSettings,
-    };
-    setPinEnabled(true);
-    StorageService.saveUser(updatedUser);
-    FirebaseService.syncUserToCloud(updatedUser).catch(() => {});
-    onUpdateUser(updatedUser);
-    setPinMessage({ text: 'Terminal PIN reset to factory default (1234).', type: 'success' });
-    setTimeout(() => setPinMessage(null), 3500);
+    setTimeout(() => setPinMessage(null), 5000);
   };
 
   // --- 2. Auto-Shred Handlers ---
@@ -707,7 +771,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setTimeout(() => setCopiedFingerprint(false), 2000);
   };
 
-  const activePin = user.privacySettings.quickLockPin || '1234';
+  const rawSavedPin = (user.privacySettings.quickLockPin || '').trim();
+  const activePin = rawSavedPin === '1234' ? '' : rawSavedPin;
+  const hasCustomPin = Boolean(activePin && activePin.length >= 4);
+
+  // 24-hour edit limit calculations
+  const lastPinUpdatedAt = user.privacySettings.quickLockPinUpdatedAt || 0;
+  const now = Date.now();
+  const timeSinceLastPinUpdate = now - lastPinUpdatedAt;
+  const canEditPin = !hasCustomPin || !lastPinUpdatedAt || timeSinceLastPinUpdate >= PIN_COOLDOWN_MS;
+  const remainingCooldownMs = canEditPin ? 0 : PIN_COOLDOWN_MS - timeSinceLastPinUpdate;
+  const remainingHours = Math.floor(remainingCooldownMs / (1000 * 60 * 60));
+  const remainingMinutes = Math.floor((remainingCooldownMs % (1000 * 60 * 60)) / (1000 * 60));
   const passStrength = calculatePasswordStrength(newPassword);
 
   return (
@@ -850,11 +925,40 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="bg-[#05070a] border border-neutral-800/90 rounded-lg sm:rounded-xl p-2.5 sm:p-3">
               <span className="text-[9px] sm:text-[10px] text-neutral-500 font-mono uppercase block">Active Passcode</span>
               <div className="flex items-center space-x-1.5 mt-1">
-                <span className="text-xs sm:text-sm font-mono font-bold text-white tracking-widest">
-                  {'•'.repeat(Math.min(activePin.length, 8))}
-                </span>
-                <span className="text-[9px] text-neutral-500 font-mono">
-                  ({activePin.length} digits)
+                {hasCustomPin ? (
+                  <>
+                    <span className="text-xs sm:text-sm font-mono font-bold text-white tracking-widest">
+                      {'•'.repeat(Math.min(activePin.length, 8))}
+                    </span>
+                    <span className="text-[9px] text-emerald-400 font-mono font-bold">
+                      ({activePin.length} digits)
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-xs sm:text-sm font-mono font-medium text-neutral-400">
+                    None (Off by Default)
+                  </span>
+                )}
+              </div>
+              <span className="text-[9px] text-neutral-500 font-mono mt-0.5 block">
+                {hasCustomPin ? 'Custom PIN enrolled' : 'Turn toggle ON to configure'}
+              </span>
+            </div>
+
+            <div className="bg-[#05070a] border border-neutral-800/90 rounded-lg sm:rounded-xl p-2.5 sm:p-3 flex items-center justify-between">
+              <div>
+                <span className="text-[9px] sm:text-[10px] text-neutral-500 font-mono uppercase block">24-Hour Edit Window</span>
+                <div className="mt-1 flex items-center space-x-1.5">
+                  <span className={`px-1.5 py-0.2 rounded text-[8px] sm:text-[9px] font-mono font-bold uppercase ${
+                    canEditPin 
+                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' 
+                      : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                  }`}>
+                    {canEditPin ? 'ELIGIBLE' : 'RATE LIMITED'}
+                  </span>
+                </div>
+                <span className="text-[9px] text-neutral-400 font-mono mt-0.5 block">
+                  {canEditPin ? 'Editable once per 24 hours' : `Next edit: ${remainingHours}h ${remainingMinutes}m`}
                 </span>
               </div>
             </div>
@@ -862,28 +966,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="bg-[#05070a] border border-neutral-800/90 rounded-lg sm:rounded-xl p-2.5 sm:p-3 flex items-center justify-between">
               <div>
                 <span className="text-[9px] sm:text-[10px] text-neutral-500 font-mono uppercase block">Live Simulation</span>
-                <button
-                  type="button"
-                  onClick={onLockTerminal}
-                  className="mt-0.5 text-[10px] sm:text-xs font-mono text-amber-400 hover:text-amber-300 flex items-center space-x-1 cursor-pointer font-bold"
-                >
-                  <Lock className="w-3 h-3" />
-                  <span>Lock Console Now</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-[#05070a] border border-neutral-800/90 rounded-lg sm:rounded-xl p-2.5 sm:p-3 flex items-center justify-between">
-              <div>
-                <span className="text-[9px] sm:text-[10px] text-neutral-500 font-mono uppercase block">Factory Defaults</span>
-                <button
-                  type="button"
-                  onClick={handleResetPinDefault}
-                  className="mt-0.5 text-[10px] sm:text-xs font-mono text-neutral-400 hover:text-white flex items-center space-x-1 cursor-pointer"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  <span>Reset to 1234</span>
-                </button>
+                {pinEnabled && hasCustomPin ? (
+                  <button
+                    type="button"
+                    onClick={onLockTerminal}
+                    className="mt-0.5 text-[10px] sm:text-xs font-mono text-amber-400 hover:text-amber-300 flex items-center space-x-1 cursor-pointer font-bold"
+                  >
+                    <Lock className="w-3 h-3" />
+                    <span>Lock Console Now</span>
+                  </button>
+                ) : (
+                  <span className="text-[10px] sm:text-xs font-mono text-neutral-500 mt-0.5 block">
+                    Lock Disarmed
+                  </span>
+                )}
+                <span className="text-[9px] text-neutral-500 font-mono mt-0.5 block">
+                  {pinEnabled && hasCustomPin ? 'PIN armed & tested' : 'Arm with PIN to lock'}
+                </span>
               </div>
             </div>
           </div>
@@ -900,46 +999,72 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => setShowPinInput(!showPinInput)}
                 className="text-[10px] sm:text-xs font-mono text-cyan-400 hover:text-cyan-300 cursor-pointer flex items-center space-x-1"
               >
-                <span>{showPinInput ? 'Close' : 'Set New PIN'}</span>
+                <span>{showPinInput ? 'Close' : hasCustomPin ? 'Edit PIN' : 'Customize PIN'}</span>
               </button>
             </div>
 
             {showPinInput && (
               <div className="space-y-2.5 pt-1.5">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-2.5">
-                  <div>
-                    <label className="text-[9px] font-mono text-neutral-400 block mb-1">Current PIN</label>
-                    <input
-                      type="password"
-                      maxLength={8}
-                      value={currentPinInput}
-                      onChange={(e) => setCurrentPinInput(e.target.value.replace(/\D/g, ''))}
-                      placeholder={activePin === '1234' ? 'Default: 1234' : 'Current PIN'}
-                      className="w-full bg-[#090d15] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white tracking-widest focus:outline-none focus:border-cyan-500"
-                    />
+                {/* 24-Hour Cooldown Banner */}
+                {!canEditPin && hasCustomPin ? (
+                  <div className="p-2.5 bg-amber-950/30 border border-amber-500/40 rounded-lg text-[10px] sm:text-xs font-mono text-amber-300 flex items-center space-x-2">
+                    <Clock className="w-3.5 h-3.5 shrink-0 text-amber-400 animate-pulse" />
+                    <span>
+                      24-Hour Edit Restriction: Terminal Armed Lock PIN can only be updated once every 24 hours. Next edit is available in <strong className="text-white">{remainingHours}h {remainingMinutes}m</strong>.
+                    </span>
                   </div>
+                ) : (
+                  <div className="p-2 bg-[#090d15] border border-cyan-500/30 rounded-lg text-[10px] sm:text-xs font-mono text-cyan-300 flex items-center space-x-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
+                    <span>
+                      {hasCustomPin 
+                        ? 'Custom PIN modification: Once updated and saved, your new PIN will sync across all sessions and can be edited again after 24 hours.' 
+                        : 'Custom PIN enrollment: Enter a 4 to 8 digit numeric PIN to arm console lock protection. Saved PIN will synchronize immediately.'}
+                    </span>
+                  </div>
+                )}
 
-                  <div>
-                    <label className="text-[9px] font-mono text-neutral-400 block mb-1">New PIN (4-8 digits)</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-2.5">
+                  {hasCustomPin && (
+                    <div>
+                      <label className="text-[9px] font-mono text-neutral-400 block mb-1">Current PIN</label>
+                      <input
+                        type="password"
+                        maxLength={8}
+                        disabled={!canEditPin}
+                        value={currentPinInput}
+                        onChange={(e) => setCurrentPinInput(e.target.value.replace(/\D/g, ''))}
+                        placeholder="Current PIN"
+                        className="w-full bg-[#090d15] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white tracking-widest focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                      />
+                    </div>
+                  )}
+
+                  <div className={!hasCustomPin ? 'sm:col-span-1.5' : ''}>
+                    <label className="text-[9px] font-mono text-neutral-400 block mb-1">
+                      {hasCustomPin ? 'New PIN (4-8 digits)' : 'Custom PIN (4-8 digits)'}
+                    </label>
                     <input
                       type="password"
                       maxLength={8}
+                      disabled={!canEditPin && hasCustomPin}
                       value={newPinInput}
                       onChange={(e) => setNewPinInput(e.target.value.replace(/\D/g, ''))}
                       placeholder="e.g. 5839"
-                      className="w-full bg-[#090d15] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white tracking-widest focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[#090d15] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white tracking-widest focus:outline-none focus:border-cyan-500 disabled:opacity-50"
                     />
                   </div>
 
-                  <div>
-                    <label className="text-[9px] font-mono text-neutral-400 block mb-1">Confirm New PIN</label>
+                  <div className={!hasCustomPin ? 'sm:col-span-1.5' : ''}>
+                    <label className="text-[9px] font-mono text-neutral-400 block mb-1">Confirm PIN</label>
                     <input
                       type="password"
                       maxLength={8}
+                      disabled={!canEditPin && hasCustomPin}
                       value={confirmPinInput}
                       onChange={(e) => setConfirmPinInput(e.target.value.replace(/\D/g, ''))}
-                      placeholder="Repeat new PIN"
-                      className="w-full bg-[#090d15] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white tracking-widest focus:outline-none focus:border-cyan-500"
+                      placeholder="Repeat PIN"
+                      className="w-full bg-[#090d15] border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white tracking-widest focus:outline-none focus:border-cyan-500 disabled:opacity-50"
                     />
                   </div>
                 </div>
@@ -948,10 +1073,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <button
                     type="button"
                     onClick={handleSavePin}
-                    className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-[10px] sm:text-xs font-mono font-bold flex items-center space-x-1 transition-colors cursor-pointer"
+                    disabled={!canEditPin && hasCustomPin}
+                    className="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-neutral-800 disabled:text-neutral-500 disabled:cursor-not-allowed text-white rounded-lg text-[10px] sm:text-xs font-mono font-bold flex items-center space-x-1.5 transition-colors cursor-pointer"
                   >
                     <Check className="w-3 h-3" />
-                    <span>Save PIN Code</span>
+                    <span>{hasCustomPin ? 'Save & Sync Updated PIN' : 'Save & Arm Custom PIN'}</span>
                   </button>
                 </div>
               </div>

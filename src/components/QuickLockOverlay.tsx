@@ -16,10 +16,15 @@ export const QuickLockOverlay: React.FC<QuickLockOverlayProps> = ({ onUnlock, co
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
 
-  const targetPin = (correctPin && correctPin.trim().length >= 4) ? correctPin.trim() : '1234';
-  const expectedLength = targetPin.length;
+  const targetPin = (correctPin || '').trim();
+  const expectedLength = targetPin.length > 0 ? targetPin.length : 4;
 
   const handleDigit = (digit: string) => {
+    if (!targetPin) {
+      // If no pin is configured, allow unlocking
+      onUnlock();
+      return;
+    }
     soundEngine.playDtmf(digit);
     if (pin.length < expectedLength) {
       const newPin = pin + digit;
@@ -78,9 +83,18 @@ export const QuickLockOverlay: React.FC<QuickLockOverlayProps> = ({ onUnlock, co
 
         <h2 className="text-base sm:text-lg font-bold font-mono tracking-tight text-white mb-1">TERMINAL ARMED &amp; LOCKED</h2>
         <p className="text-[11px] sm:text-xs text-neutral-400 font-mono mb-5 sm:mb-6">
-          Enter {expectedLength}-digit PIN to unlock console
-          {targetPin === '1234' ? ' (Default: 1234)' : ''}
+          {targetPin ? `Enter your ${expectedLength}-digit custom PIN to unlock console` : 'No custom PIN configured. Tap unlock or configure in Settings.'}
         </p>
+
+        {!targetPin && (
+          <button
+            type="button"
+            onClick={onUnlock}
+            className="mb-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-mono font-bold cursor-pointer transition-colors"
+          >
+            Unlock Console
+          </button>
+        )}
 
         {/* PIN Indicators */}
         <div className="flex items-center justify-center space-x-2 sm:space-x-3 mb-6 sm:mb-8 flex-wrap gap-y-2">

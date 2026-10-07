@@ -258,7 +258,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
         hardwareNoiseSuppression: true,
         antiMetadata: true,
         quickLockPinEnabled: false,
-        quickLockPin: '1234',
+        quickLockPin: '',
       };
 
       const primaryDevice: DeviceSession = {

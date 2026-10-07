@@ -635,20 +635,20 @@ export default function App() {
         />
       )}
 
-      {/* Header - Adapts dynamically to mobile, tablet, and desktop */}
+      {/* Header - Adapts dynamically to mobile, tablet, and desktop (reduced by 5%) */}
       <header className="border-b border-neutral-800/80 bg-[#07090e]/90 backdrop-blur-xl sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2">
+        <div className="max-w-7xl mx-auto px-3 sm:px-5 h-[53px] sm:h-[61px] flex items-center justify-between gap-2">
           
           {/* Brand & Assigned Number Lockup */}
-          <div className="flex items-center space-x-2 sm:space-x-4 min-w-0">
-            <a href="/" className="text-sm sm:text-base md:text-lg font-bold font-mono tracking-wider text-white hover:text-emerald-400 transition-colors flex items-center space-x-1.5 sm:space-x-2 shrink-0">
+          <div className="flex items-center space-x-2 sm:space-x-3.5 min-w-0">
+            <a href="/" className="text-[13px] sm:text-[15px] md:text-[17px] font-bold font-mono tracking-wider text-white hover:text-emerald-400 transition-colors flex items-center space-x-1.5 sm:space-x-2 shrink-0">
               <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)] inline-block animate-pulse shrink-0" />
               <span className="hidden xs:inline sm:inline">SHADOWFREQUENCY</span>
               <span className="xs:hidden sm:hidden">SF_NODE</span>
             </a>
 
             {/* Assigned virtual number badge */}
-            <div className="flex items-center space-x-1.5 bg-[#0c1017] border border-neutral-800/90 rounded-lg sm:rounded-xl px-2 sm:px-3 py-0.5 sm:py-1 text-xs">
+            <div className="flex items-center space-x-1.5 bg-[#0c1017] border border-neutral-800/90 rounded-lg sm:rounded-xl px-2 sm:px-2.5 py-0.5 sm:py-1 text-xs">
               {currentUser.customNumberSubscription?.active ? (
                 <span className="px-1 py-0.2 rounded bg-amber-500/20 border border-amber-500/40 text-[8px] font-mono text-amber-300 font-bold flex items-center space-x-0.5 shrink-0" title={`VIP Custom Number (${currentUser.customNumberSubscription.planName})`}>
                   <Crown className="w-2.5 h-2.5" />
@@ -657,7 +657,7 @@ export default function App() {
               ) : (
                 <span className="text-[9px] sm:text-[10px] text-neutral-400 font-mono hidden md:inline">LINE:</span>
               )}
-              <span className={`font-mono font-bold text-[11px] sm:text-xs truncate max-w-[130px] sm:max-w-none ${
+              <span className={`font-mono font-bold text-[11px] sm:text-xs truncate max-w-[125px] sm:max-w-none ${
                 currentUser.customNumberSubscription?.active ? 'text-amber-300' : 'text-emerald-400'
               }`}>
                 {currentUser.assignedNumber}
@@ -665,7 +665,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleCopyNumber}
-                className="p-1 text-neutral-400 hover:text-white rounded transition-colors cursor-pointer"
+                className="p-1 text-neutral-400 hover:text-white rounded-lg transition-colors cursor-pointer hover:bg-neutral-800/60"
                 title="Copy assigned virtual number"
               >
                 {copiedNumber ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
@@ -674,15 +674,15 @@ export default function App() {
           </div>
 
           {/* Desktop Navigation Tabs (Hidden on mobile; mobile uses fixed bottom dock) */}
-          <nav className="hidden sm:flex items-center gap-1.5 sm:gap-2">
+          <nav className="hidden sm:flex items-center gap-1 sm:gap-1.5">
             <button
               id="nav-dialer-btn"
               type="button"
               onClick={() => setActiveTab('dialer')}
-              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
+              className={`px-2.5 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
                 activeTab === 'dialer'
                   ? 'bg-neutral-800 text-white shadow-sm border border-neutral-700'
-                  : 'text-neutral-400 hover:text-neutral-200'
+                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40'
               }`}
             >
               <Phone className="w-3.5 h-3.5 text-emerald-400" />
@@ -693,10 +693,10 @@ export default function App() {
               id="nav-history-btn"
               type="button"
               onClick={() => setActiveTab('history')}
-              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
+              className={`px-2.5 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
                 activeTab === 'history'
                   ? 'bg-neutral-800 text-white shadow-sm border border-neutral-700'
-                  : 'text-neutral-400 hover:text-neutral-200'
+                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40'
               }`}
             >
               <History className="w-3.5 h-3.5 text-cyan-400" />
@@ -712,10 +712,10 @@ export default function App() {
               id="nav-privacy-btn"
               type="button"
               onClick={() => setActiveTab('privacy')}
-              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
+              className={`px-2.5 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
                 activeTab === 'privacy'
                   ? 'bg-neutral-800 text-white shadow-sm border border-neutral-700'
-                  : 'text-neutral-400 hover:text-neutral-200'
+                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40'
               }`}
             >
               <Shield className="w-3.5 h-3.5 text-emerald-400" />
@@ -726,10 +726,10 @@ export default function App() {
               id="nav-settings-btn"
               type="button"
               onClick={() => setActiveTab('settings')}
-              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
+              className={`px-2.5 py-1.5 text-xs font-mono font-medium rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer ${
                 activeTab === 'settings'
                   ? 'bg-neutral-800 text-white shadow-sm border border-neutral-700'
-                  : 'text-neutral-400 hover:text-neutral-200'
+                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40'
               }`}
             >
               <Sliders className="w-3.5 h-3.5 text-cyan-400" />
@@ -737,60 +737,62 @@ export default function App() {
             </button>
           </nav>
 
-          {/* Quick Header Actions */}
-          <div className="flex items-center space-x-1.5 sm:space-x-2">
-            {/* Real-Time XrAnonymous Security Bot */}
+          {/* Quick Header Actions - All icons share identical square rounded button styling */}
+          <div className="flex items-center space-x-1 sm:space-x-1.5">
+            {/* Real-Time XrAnonymous Security Bot Icon Button */}
             <button
               id="open-security-bot-btn"
               type="button"
               onClick={() => setShowSecurityBot(true)}
-              className="p-1.5 sm:px-2.5 sm:py-1.5 bg-[#0c1017] hover:bg-neutral-800 border border-cyan-500/30 hover:border-cyan-500/70 text-cyan-300 hover:text-white text-xs font-mono rounded-xl transition-colors flex items-center space-x-1.5 cursor-pointer min-h-[36px] min-w-[36px] sm:min-w-0 justify-center group"
-              title="XrAnonymous Real-Time Inbuilt Security Bot"
+              className="p-2 text-neutral-400 hover:text-cyan-400 hover:bg-neutral-800/80 rounded-xl transition-colors cursor-pointer min-h-[34px] min-w-[34px] flex items-center justify-center"
+              title="XrAnonymous Real-Time Security Bot"
             >
-              <Bot className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
-              <span className="hidden lg:inline">XrAnonymous Bot</span>
+              <Bot className="w-4 h-4" />
             </button>
 
+            {/* Penetration Testing & Security Audit Icon Button */}
             <button
               id="open-security-audit-btn"
               type="button"
               onClick={() => setShowSecurityAudit(true)}
-              className="p-1.5 sm:px-2.5 sm:py-1.5 bg-[#0c1017] hover:bg-neutral-800 border border-neutral-800 hover:border-emerald-500/50 text-neutral-300 hover:text-white text-xs font-mono rounded-xl transition-colors flex items-center space-x-1.5 cursor-pointer min-h-[36px] min-w-[36px] sm:min-w-0 justify-center"
+              className="p-2 text-neutral-400 hover:text-emerald-400 hover:bg-neutral-800/80 rounded-xl transition-colors cursor-pointer min-h-[34px] min-w-[34px] flex items-center justify-center"
               title="Penetration Testing & Security Audit"
             >
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span className="hidden md:inline">Pen Test &amp; Audit</span>
+              <ShieldCheck className="w-4 h-4" />
             </button>
 
+            {/* Terminal Customisation Settings Icon Button */}
             <button
               id="header-settings-btn"
               type="button"
               onClick={() => setActiveTab('settings')}
-              className={`p-2 rounded-xl transition-colors cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center ${
+              className={`p-2 rounded-xl transition-colors cursor-pointer min-h-[34px] min-w-[34px] flex items-center justify-center ${
                 activeTab === 'settings'
-                  ? 'bg-neutral-800 text-white border border-cyan-500/40'
+                  ? 'bg-neutral-800 text-cyan-400 border border-cyan-500/40'
                   : 'text-neutral-400 hover:text-white hover:bg-neutral-800/80'
               }`}
               title="Terminal Customisation Settings"
             >
-              <Sliders className="w-4 h-4 text-cyan-400" />
+              <Sliders className="w-4 h-4" />
             </button>
 
+            {/* Console PIN Lock Icon Button */}
             <button
               id="quick-lock-btn"
               type="button"
               onClick={() => setIsQuickLocked(true)}
-              className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/80 rounded-xl transition-colors cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center"
+              className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/80 rounded-xl transition-colors cursor-pointer min-h-[34px] min-w-[34px] flex items-center justify-center"
               title="Lock Console (PIN Protected)"
             >
               <Lock className="w-4 h-4" />
             </button>
 
+            {/* Session Terminate Icon Button */}
             <button
               id="logout-btn"
               type="button"
               onClick={handleLogout}
-              className="p-2 text-neutral-400 hover:text-red-400 hover:bg-neutral-800/80 rounded-xl transition-colors cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center"
+              className="p-2 text-neutral-400 hover:text-red-400 hover:bg-neutral-800/80 rounded-xl transition-colors cursor-pointer min-h-[34px] min-w-[34px] flex items-center justify-center"
               title="Terminate Session"
             >
               <LogOut className="w-4 h-4" />

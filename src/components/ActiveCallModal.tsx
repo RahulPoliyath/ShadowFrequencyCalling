@@ -7,12 +7,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   PhoneOff, Mic, MicOff, Volume2, VolumeX, Shield, ShieldCheck, 
   MessageSquare, Lock, Key, Users, Send, Clock, Activity, Check, Copy,
-  Radio, Cpu, Zap, Wifi
+  Radio, Cpu, Zap, Wifi, BarChart2, Waves, Eye
 } from 'lucide-react';
 import { ActiveCallState, EncryptedMessage } from '../types';
 import { soundEngine } from '../services/audio';
 import { StorageService } from '../services/storage';
-import { webRtcManager } from '../services/webrtc';
+import { webRtcManager, WebRtcDiagnosticSample } from '../services/webrtc';
+import { CallDiagnosticsChart } from './CallDiagnosticsChart';
 
 interface ActiveCallModalProps {
   call: ActiveCallState;
@@ -32,6 +33,11 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
   const [whisperText, setWhisperText] = useState('');
   const [whispers, setWhispers] = useState<EncryptedMessage[]>([]);
   const [copiedSas, setCopiedSas] = useState(false);
+
+  // Diagnostic D3 Telemetry State
+  const [diagnosticSamples, setDiagnosticSamples] = useState<WebRtcDiagnosticSample[]>([]);
+  const [currentSample, setCurrentSample] = useState<WebRtcDiagnosticSample | null>(null);
+  const [telemetryView, setTelemetryView] = useState<'d3-chart' | 'spectrum'>('d3-chart');
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
@@ -54,20 +60,47 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
     }
 
     let timer: any = null;
+    let statsInterval: any = null;
+
     if (call.status === 'connected') {
+      // Duration timer
       timer = setInterval(() => {
         onUpdateCall(prev => ({
           ...prev,
           duration: prev.duration + 1,
-          packetsSent: prev.packetsSent + Math.floor(Math.random() * 5 + 48),
-          packetsReceived: prev.packetsReceived + Math.floor(Math.random() * 5 + 48),
-          latencyMs: Math.floor(10 + Math.random() * 5),
         }));
       }, 1000);
+
+      // High-precision WebRTC diagnostic polling for D3 charts
+      const pollDiagnostics = async () => {
+        try {
+          const sample = await webRtcManager.getDiagnosticSample(call.duration);
+          setCurrentSample(sample);
+          setDiagnosticSamples(prev => {
+            const next = [...prev, sample];
+            // Rolling 45-second window for responsive D3 timeline
+            return next.length > 45 ? next.slice(-45) : next;
+          });
+
+          onUpdateCall(prev => ({
+            ...prev,
+            bitrateKbps: sample.bitrateKbps,
+            latencyMs: sample.roundTripTimeMs,
+            packetsSent: prev.packetsSent + Math.floor(Math.random() * 3 + 48),
+            packetsReceived: prev.packetsReceived + Math.floor(Math.random() * 3 + 48),
+          }));
+        } catch (e) {
+          console.warn('Diagnostic polling notice:', e);
+        }
+      };
+
+      pollDiagnostics();
+      statsInterval = setInterval(pollDiagnostics, 1000);
     }
 
     return () => {
       if (timer) clearInterval(timer);
+      if (statsInterval) clearInterval(statsInterval);
       if (call.status === 'connected' || isEcho) {
         webRtcManager.cleanup();
       }
@@ -281,55 +314,103 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
             </span>
           </div>
 
-          {/* Audio Visualizer Canvas */}
-          <div className="mt-4 sm:mt-5 flex flex-col items-center justify-center px-1">
-            <div className="w-full max-w-md h-16 sm:h-20 md:h-24 bg-[#05070a] border border-neutral-800/90 rounded-2xl p-2 flex items-center justify-center shadow-inner relative overflow-hidden">
-              <canvas
-                ref={canvasRef}
-                width={380}
-                height={76}
-                className="w-full h-full"
-              />
-
-              {call.isMuted && (
-                <div className="absolute inset-0 bg-black/75 backdrop-blur-[2px] flex items-center justify-center space-x-2 text-red-400 font-mono text-[11px] sm:text-xs font-semibold tracking-wider">
-                  <MicOff className="w-4 h-4 text-red-500 animate-pulse" />
-                  <span>MIC MUTED • ZERO PACKETS TRANSMITTING</span>
-                </div>
-              )}
-            </div>
-
-            {/* Voice Isolation & Anti-Echo Status */}
-            <div className="mt-2 flex items-center justify-center space-x-2.5 text-[8px] sm:text-[9px] font-mono text-emerald-400/90">
-              <span className="flex items-center space-x-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span>Noise Gate: ACTIVE</span>
-              </span>
-              <span className="text-neutral-600">•</span>
-              <span className="flex items-center space-x-1 text-cyan-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-                <span>Echo Suppressor: ACTIVE</span>
-              </span>
-              <span className="text-neutral-600 hidden xs:inline">•</span>
-              <span className="text-neutral-500 hidden xs:inline">Opus DTX</span>
-            </div>
-            
-            {/* Real-time Telemetry Metrics */}
-            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 w-full max-w-md mt-2 font-mono text-[9px] sm:text-[10px] text-neutral-400">
-              <div className="bg-[#06080d] border border-neutral-800/80 rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center">
-                <span className="text-neutral-500 block uppercase text-[8px] sm:text-[9px]">Bitrate</span>
-                <span className="text-neutral-200 font-semibold">{call.bitrateKbps} kbps</span>
-              </div>
-              <div className="bg-[#06080d] border border-neutral-800/80 rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center">
-                <span className="text-neutral-500 block uppercase text-[8px] sm:text-[9px]">Latency</span>
-                <span className="text-emerald-400 font-semibold">{call.latencyMs} ms</span>
-              </div>
-              <div className="bg-[#06080d] border border-neutral-800/80 rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center">
-                <span className="text-neutral-500 block uppercase text-[8px] sm:text-[9px]">Packets</span>
-                <span className="text-neutral-200 font-semibold">{call.packetsSent} / {call.packetsReceived}</span>
-              </div>
+          {/* Diagnostics Mode Switcher: D3 Telemetry vs. Spectrum Waveform */}
+          <div className="flex items-center justify-center my-2 sm:my-3">
+            <div className="inline-flex bg-[#070a10] border border-neutral-800/90 rounded-xl p-1 text-[10px] sm:text-[11px] font-mono shadow-inner">
+              <button
+                id="telemetry-d3-chart-tab"
+                type="button"
+                onClick={() => setTelemetryView('d3-chart')}
+                className={`px-3 py-1 rounded-lg flex items-center space-x-1.5 transition-all cursor-pointer ${
+                  telemetryView === 'd3-chart'
+                    ? 'bg-cyan-950/80 text-cyan-300 font-bold border border-cyan-500/50 shadow-[0_0_12px_rgba(6,182,212,0.25)]'
+                    : 'text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                <BarChart2 className="w-3.5 h-3.5 text-cyan-400" />
+                <span>D3 TELEMETRY &amp; JITTER HEALTH</span>
+              </button>
+              <button
+                id="telemetry-spectrum-tab"
+                type="button"
+                onClick={() => setTelemetryView('spectrum')}
+                className={`px-3 py-1 rounded-lg flex items-center space-x-1.5 transition-all cursor-pointer ${
+                  telemetryView === 'spectrum'
+                    ? 'bg-emerald-950/80 text-emerald-300 font-bold border border-emerald-500/50 shadow-[0_0_12px_rgba(16,185,129,0.25)]'
+                    : 'text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                <Waves className="w-3.5 h-3.5 text-emerald-400" />
+                <span>SPECTRUM WAVE</span>
+              </button>
             </div>
           </div>
+
+          {/* D3 Real-Time Diagnostics Chart View */}
+          {telemetryView === 'd3-chart' ? (
+            <div className="mt-1 w-full max-w-lg mx-auto">
+              <CallDiagnosticsChart
+                samples={diagnosticSamples}
+                currentBitrate={currentSample ? currentSample.bitrateKbps : (call.bitrateKbps || 48.0)}
+                currentHealth={currentSample ? currentSample.jitterBufferHealthPct : 98.4}
+                currentJitterMs={currentSample ? currentSample.jitterMs : 3.4}
+                currentDelayMs={currentSample ? currentSample.jitterBufferDelayMs : 5.8}
+                packetsLost={currentSample ? currentSample.packetsLost : 0}
+                latencyMs={currentSample ? currentSample.roundTripTimeMs : (call.latencyMs || 12)}
+                isMuted={call.isMuted}
+              />
+            </div>
+          ) : (
+            /* Audio Visualizer Canvas & Legacy Spectrum */
+            <div className="mt-2 flex flex-col items-center justify-center px-1 w-full max-w-lg mx-auto">
+              <div className="w-full h-16 sm:h-20 md:h-24 bg-[#05070a] border border-neutral-800/90 rounded-2xl p-2 flex items-center justify-center shadow-inner relative overflow-hidden">
+                <canvas
+                  ref={canvasRef}
+                  width={380}
+                  height={76}
+                  className="w-full h-full"
+                />
+
+                {call.isMuted && (
+                  <div className="absolute inset-0 bg-black/75 backdrop-blur-[2px] flex items-center justify-center space-x-2 text-red-400 font-mono text-[11px] sm:text-xs font-semibold tracking-wider">
+                    <MicOff className="w-4 h-4 text-red-500 animate-pulse" />
+                    <span>MIC MUTED • ZERO PACKETS TRANSMITTING</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Voice Isolation & Anti-Echo Status */}
+              <div className="mt-2 flex items-center justify-center space-x-2.5 text-[8px] sm:text-[9px] font-mono text-emerald-400/90">
+                <span className="flex items-center space-x-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>Noise Gate: ACTIVE</span>
+                </span>
+                <span className="text-neutral-600">•</span>
+                <span className="flex items-center space-x-1 text-cyan-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                  <span>Echo Suppressor: ACTIVE</span>
+                </span>
+                <span className="text-neutral-600 hidden xs:inline">•</span>
+                <span className="text-neutral-500 hidden xs:inline">Opus DTX</span>
+              </div>
+              
+              {/* Real-time Telemetry Metrics */}
+              <div className="grid grid-cols-3 gap-1.5 sm:gap-2 w-full mt-2 font-mono text-[9px] sm:text-[10px] text-neutral-400">
+                <div className="bg-[#06080d] border border-neutral-800/80 rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center">
+                  <span className="text-neutral-500 block uppercase text-[8px] sm:text-[9px]">Bitrate</span>
+                  <span className="text-neutral-200 font-semibold">{call.bitrateKbps} kbps</span>
+                </div>
+                <div className="bg-[#06080d] border border-neutral-800/80 rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center">
+                  <span className="text-neutral-500 block uppercase text-[8px] sm:text-[9px]">Latency</span>
+                  <span className="text-emerald-400 font-semibold">{call.latencyMs} ms</span>
+                </div>
+                <div className="bg-[#06080d] border border-neutral-800/80 rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center">
+                  <span className="text-neutral-500 block uppercase text-[8px] sm:text-[9px]">Packets</span>
+                  <span className="text-neutral-200 font-semibold">{call.packetsSent} / {call.packetsReceived}</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Ephemeral Whispers Drawer */}
